@@ -2,15 +2,8 @@
 # Driver Drowsiness Detection (DDD) — .gitignore
 # ─────────────────────────────────────────────
 
-# ── Dataset & large raw data (too large for GitHub ~2.6 GB) ──
-data/Driver Drowsiness Dataset (DDD)/
-data/unseen_test_images/
-data/geometric_features.csv
-data/splits.json
-data/all_filenames.csv
-data/all_filenames.json
-data/unseen_test_filenames.csv
-data/unseen_test_filenames.json
+# ── Data directory (dataset, splits, features — reproducible) ──
+data/
 ml_pipeline/extract_features.py
 
 # ── Trained model checkpoints (binary, large) ──

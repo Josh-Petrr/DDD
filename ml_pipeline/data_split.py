@@ -20,12 +20,10 @@ import config
 
 def _parse_subject_groups(directory: str, label: int) -> dict[str, list[dict]]:
     """
-    Group images into subject blocks.
+    Group images into subject blocks based on alphabetical filename prefixes.
     
-    Strategy: consecutive numbered images (e.g., A0001–A0080) are assumed to
-    be from the same session/subject.  A gap of ≥3 in the numbering signals a
-    new subject boundary.  This is a practical heuristic for datasets that
-    don't include explicit subject IDs.
+    Strategy: Files with the same alphabetical prefix (e.g., 'A', 'ZA', 'a', 'zc')
+    are considered to belong to the same subject/session.
     """
     files = sorted([
         f for f in os.listdir(directory)
@@ -35,53 +33,24 @@ def _parse_subject_groups(directory: str, label: int) -> dict[str, list[dict]]:
     if not files:
         return {}
     
-    # Extract numeric part from filename
-    def get_number(fname):
-        # "A0001.png" → 1, "B1234.png" → 1234
+    groups = defaultdict(list)
+    
+    for fname in files:
+        # Extract alphabetical prefix from filename (e.g., "ZA0007.png" -> "ZA")
         name = os.path.splitext(fname)[0]
-        num_str = ''.join(c for c in name if c.isdigit())
-        return int(num_str) if num_str else 0
-    
-    prefix = files[0][0]  # 'A' for Drowsy, 'B' for Non Drowsy
-    GAP_THRESHOLD = 3     # gap of ≥3 = new subject
-    
-    groups = {}
-    current_group = []
-    current_group_id = 0
-    prev_num = None
-    
-    for f in files:
-        num = get_number(f)
-        if prev_num is not None and (num - prev_num) >= GAP_THRESHOLD:
-            # Save current group
-            group_key = f"{prefix}_group_{current_group_id}"
-            groups[group_key] = [
-                {
-                    "filename": fname,
-                    "path": os.path.join(directory, fname),
-                    "label": label
-                }
-                for fname in current_group
-            ]
-            current_group = []
-            current_group_id += 1
+        prefix = "".join(c for c in name if c.isalpha())
         
-        current_group.append(f)
-        prev_num = num
-    
-    # Save last group
-    if current_group:
-        group_key = f"{prefix}_group_{current_group_id}"
-        groups[group_key] = [
-            {
-                "filename": fname,
-                "path": os.path.join(directory, fname),
-                "label": label
-            }
-            for fname in current_group
-        ]
-    
-    return groups
+        # Fallback if no letters are found
+        if not prefix:
+            prefix = "UNKNOWN"
+            
+        groups[prefix].append({
+            "filename": fname,
+            "path": os.path.join(directory, fname),
+            "label": label
+        })
+        
+    return dict(groups)
 
 
 def create_subject_disjoint_split(seed: int = config.SEED) -> dict:

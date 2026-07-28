@@ -53,9 +53,9 @@ def main():
         print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     # ── Step 1: Create or load splits ──
-    print("\n" + "─" * 60)
+    print("\n" + "-" * 60)
     print("Step 1: Data Splitting")
-    print("─" * 60)
+    print("-" * 60)
     
     if os.path.exists(config.SPLITS_FILE):
         print(f"Loading existing splits from {config.SPLITS_FILE}")
@@ -90,37 +90,38 @@ def main():
     loaders = create_dataloaders(splits, geo_df)
     
     # ── Step 4: Train all models ──
-    model_names = ["baseline", "geometric", "fusion"]
+    # (architecture_type, save_name) — save_name gets _2 suffix to preserve old checkpoints
+    model_configs = [("baseline", "baseline_2"), ("geometric", "geometric_2"), ("fusion", "fusion_2")]
     histories = {}
     
-    for model_name in model_names:
+    for arch_type, save_name in model_configs:
         print(f"\n{'#' * 60}")
-        print(f"# Training: {model_name.upper()}")
+        print(f"# Training: {save_name.upper()}")
         print(f"{'#' * 60}")
         
-        model = get_model(model_name, pretrained=True)
+        model = get_model(arch_type, pretrained=True)
         params = count_parameters(model)
-        print(f"Parameters — Total: {params['total']:,} | "
+        print(f"Parameters -- Total: {params['total']:,} | "
               f"Trainable: {params['trainable']:,}")
         
-        history = train_model(model, loaders, model_name)
-        histories[model_name] = history
+        history = train_model(model, loaders, save_name)
+        histories[save_name] = history
         
         # Clear GPU memory
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
-    # ── Summary ──
+    # -- Summary --
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")
-    print(f"ALL TRAINING COMPLETE — Total time: {elapsed/60:.1f} minutes")
+    print(f"ALL TRAINING COMPLETE -- Total time: {elapsed/60:.1f} minutes")
     print(f"{'=' * 60}")
     
     print(f"\nBest validation accuracies:")
-    for name in model_names:
-        best_val = max(histories[name]["val_acc"])
-        print(f"  {name:>12}: {100*best_val:.2f}%")
+    for _, save_name in model_configs:
+        best_val = max(histories[save_name]["val_acc"])
+        print(f"  {save_name:>12}: {100*best_val:.2f}%")
     
     print(f"\nCheckpoints saved in: {config.CHECKPOINTS_DIR}")
     print(f"Training logs saved in: {config.RESULTS_DIR}")
