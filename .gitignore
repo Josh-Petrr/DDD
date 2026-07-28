@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────
+# Driver Drowsiness Detection (DDD) — .gitignore
+# ─────────────────────────────────────────────
+
+# ── Dataset & large raw data (too large for GitHub ~2.6 GB) ──
+data/Driver Drowsiness Dataset (DDD)/
+data/geometric_features.csv
+data/splits.json
+
+# ── Trained model checkpoints (binary, large) ──
+# To share weights, use GitHub Releases or a model hub (e.g. HuggingFace)
+assets/checkpoints/*.pth
+assets/checkpoints/*.pt
+
+# ── Python cache ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+
+# ── Python virtual environments ──
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── Environment variable files ──
+.env
+.env.local
+.env.*.local
+
+# ── Node.js (for when frontend is added) ──
+node_modules/
+dist/
+.next/
+build/
+
+# ── Jupyter ──
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
+
+# ── Results (generated output — reproducible via generate_report.py) ──
+# Comment these out if you want to commit result plots to the repo
+results/*.png
+results/*.csv
+results/*.json
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Temporary files ──
+*.tmp
+*.temp
