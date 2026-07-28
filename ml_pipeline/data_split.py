@@ -152,9 +152,35 @@ def save_splits(splits: dict, path: str = config.SPLITS_FILE):
 
 
 def load_splits(path: str = config.SPLITS_FILE) -> dict:
-    """Load previously saved splits."""
+    """
+    Load previously saved splits.
+
+    Re-resolves image paths against the current config.DATASET_ROOT so that
+    splits.json remains portable even if the project folder is moved/renamed.
+    """
     with open(path, 'r') as f:
-        return json.load(f)
+        raw = json.load(f)
+
+    # Map label index → directory (0=Drowsy, 1=Non Drowsy)
+    label_to_dir = {
+        0: config.DROWSY_DIR,
+        1: config.NON_DROWSY_DIR,
+    }
+
+    resolved = {}
+    for split_name, items in raw.items():
+        resolved_items = []
+        for item in items:
+            correct_dir = label_to_dir[item["label"]]
+            correct_path = os.path.join(correct_dir, item["filename"])
+            resolved_items.append({
+                "filename": item["filename"],
+                "path": correct_path,
+                "label": item["label"],
+            })
+        resolved[split_name] = resolved_items
+
+    return resolved
 
 
 def print_split_summary(splits: dict):

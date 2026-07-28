@@ -8,6 +8,19 @@ Usage:
     python generate_report.py
 """
 
+import os
+import sys
+import json
+
+import numpy as np
+import pandas as pd
+import torch
+
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 DOCS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(DOCS_DIR)
 if PROJECT_ROOT not in sys.path:

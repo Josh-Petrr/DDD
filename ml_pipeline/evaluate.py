@@ -50,7 +50,7 @@ def evaluate_model(model: torch.nn.Module, test_loader,
             geo_features = geo_features.to(device, non_blocking=True)
             
             if device.type == "cuda":
-                with autocast("cuda"):
+                with autocast(device_type="cuda"):
                     outputs = model(images, geo_features)
             else:
                 outputs = model(images, geo_features)

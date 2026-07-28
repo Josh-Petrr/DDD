@@ -55,7 +55,10 @@ TEST_RATIO = 0.15
 # ──────────────────────────────────────────────
 SEED = 42
 BATCH_SIZE = 32
-NUM_WORKERS = 4
+# Windows requires NUM_WORKERS=0 due to multiprocessing spawn limitations.
+# On Linux/macOS, set this to 4 for faster data loading.
+import platform
+NUM_WORKERS = 0 if platform.system() == "Windows" else 4
 
 # Stage 1: Frozen backbone — train only fusion head
 STAGE1_EPOCHS = 5

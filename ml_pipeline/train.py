@@ -43,7 +43,7 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     model = model.to(device)
     
     criterion = nn.CrossEntropyLoss()
-    scaler = GradScaler("cuda") if device.type == "cuda" else None
+    scaler = GradScaler(device="cuda") if device.type == "cuda" else None
     
     history = {
         "epoch": [], "stage": [],
@@ -160,7 +160,7 @@ def _run_epoch(model, loaders, optimizer, criterion, scaler,
         optimizer.zero_grad()
         
         if scaler is not None:
-            with autocast("cuda"):
+            with autocast(device_type="cuda"):
                 outputs = model(images, geo_features)
                 loss = criterion(outputs, labels)
             scaler.scale(loss).backward()
@@ -195,7 +195,7 @@ def _run_epoch(model, loaders, optimizer, criterion, scaler,
             labels = labels.to(device, non_blocking=True)
             
             if scaler is not None:
-                with autocast("cuda"):
+                with autocast(device_type="cuda"):
                     outputs = model(images, geo_features)
                     loss = criterion(outputs, labels)
             else:
