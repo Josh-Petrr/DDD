@@ -266,7 +266,7 @@ def main():
     loaders = create_dataloaders(splits, geo_df)
     
     # ── Evaluate all models ──
-    model_names = ["baseline", "geometric", "fusion"]
+    model_names = ["baseline_2", "geometric_2", "fusion_2"]
     all_results = {}
     
     for name in model_names:
@@ -276,7 +276,8 @@ def main():
             continue
         
         print(f"\nEvaluating {name.upper()}...")
-        model = get_model(name, pretrained=False)
+        arch_name = name.replace("_2", "")
+        model = get_model(arch_name, pretrained=False)
         model.load_state_dict(torch.load(checkpoint, map_location=config.DEVICE,
                                           weights_only=True))
         

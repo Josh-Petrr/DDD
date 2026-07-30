@@ -42,7 +42,7 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     """
     model = model.to(device)
     
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     scaler = GradScaler(device="cuda") if device.type == "cuda" else None
     
     history = {

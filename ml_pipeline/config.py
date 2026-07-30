@@ -69,7 +69,7 @@ STAGE2_EPOCHS = 15
 STAGE2_LR = 1e-4
 STAGE2_BACKBONE_LR = 1e-5     # Lower LR for pretrained layers
 
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-3
 EARLY_STOPPING_PATIENCE = 5
 
 # ──────────────────────────────────────────────

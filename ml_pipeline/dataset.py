@@ -54,6 +54,7 @@ class DrowsinessDataset(Dataset):
                                        saturation=0.1, hue=0.05),
                 transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
                 transforms.ToTensor(),
+                transforms.RandomErasing(p=0.25, scale=(0.02, 0.15), value='random'),
                 transforms.Normalize(mean=config.IMAGENET_MEAN, 
                                      std=config.IMAGENET_STD),
             ])
@@ -126,6 +127,7 @@ class DrowsinessDataset(Dataset):
         ]
         
         geo_tensor = torch.tensor(normalized, dtype=torch.float32)
+        geo_tensor = torch.clamp(geo_tensor, min=-3.0, max=3.0)
         label = torch.tensor(item["label"], dtype=torch.long)
         
         return image_tensor, geo_tensor, label

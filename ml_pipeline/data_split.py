@@ -18,90 +18,86 @@ from collections import defaultdict
 import config
 
 
-def _parse_subject_groups(directory: str, label: int) -> dict[str, list[dict]]:
+def _parse_all_subjects() -> dict:
     """
-    Group images into subject blocks based on alphabetical filename prefixes.
-    
-    Strategy: Files with the same alphabetical prefix (e.g., 'A', 'ZA', 'a', 'zc')
-    are considered to belong to the same subject/session.
+    Globally group all images from both classes by subject prefix.
+    Returns: dict[prefix] = {"drowsy": [...], "non_drowsy": [...]}
     """
-    files = sorted([
-        f for f in os.listdir(directory)
-        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-    ])
+    global_groups = defaultdict(lambda: {"drowsy": [], "non_drowsy": []})
     
-    if not files:
-        return {}
-    
-    groups = defaultdict(list)
-    
-    for fname in files:
-        # Extract alphabetical prefix from filename (e.g., "ZA0007.png" -> "ZA")
-        name = os.path.splitext(fname)[0]
-        prefix = "".join(c for c in name if c.isalpha())
-        
-        # Fallback if no letters are found
-        if not prefix:
-            prefix = "UNKNOWN"
+    def add_directory(directory, label, label_key):
+        if not os.path.exists(directory): return
+        files = [f for f in os.listdir(directory) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        for fname in files:
+            name = os.path.splitext(fname)[0]
+            prefix = "".join(c for c in name if c.isalpha()).upper()
+            if not prefix: prefix = "UNKNOWN"
             
-        groups[prefix].append({
-            "filename": fname,
-            "path": os.path.join(directory, fname),
-            "label": label
-        })
-        
-    return dict(groups)
+            global_groups[prefix][label_key].append({
+                "filename": fname,
+                "path": os.path.join(directory, fname),
+                "label": label
+            })
+            
+    add_directory(config.DROWSY_DIR, 0, "drowsy")
+    add_directory(config.NON_DROWSY_DIR, 1, "non_drowsy")
+    return dict(global_groups)
 
 
 def create_subject_disjoint_split(seed: int = config.SEED) -> dict:
     """
-    Create train/val/test splits where subject groups don't overlap.
-    
-    Returns dict with keys 'train', 'val', 'test', each containing a list
-    of {"filename", "path", "label"} dicts.
+    Create train/val/test splits where subject groups don't overlap globally.
+    Ensures an exact 50/50 class balance in Val and Test sets by trimming.
     """
     random.seed(seed)
     np.random.seed(seed)
     
-    # Get subject groups for both classes
-    drowsy_groups = _parse_subject_groups(config.DROWSY_DIR, label=0)
-    non_drowsy_groups = _parse_subject_groups(config.NON_DROWSY_DIR, label=1)
+    groups = _parse_all_subjects()
+    group_keys = list(groups.keys())
+    random.shuffle(group_keys)
     
-    print(f"Found {len(drowsy_groups)} subject groups in Drowsy "
-          f"({sum(len(v) for v in drowsy_groups.values())} images)")
-    print(f"Found {len(non_drowsy_groups)} subject groups in Non Drowsy "
-          f"({sum(len(v) for v in non_drowsy_groups.values())} images)")
+    # Calculate target sizes based on TOTAL images
+    total_images = sum(len(v["drowsy"]) + len(v["non_drowsy"]) for v in groups.values())
+    train_target = int(total_images * config.TRAIN_RATIO)
+    val_target = int(total_images * config.VAL_RATIO)
     
-    splits = {"train": [], "val": [], "test": []}
+    raw_splits = {"train": [], "val": [], "test": []}
+    count = 0
     
-    # Split each class independently to maintain balance
-    for class_name, groups in [("Drowsy", drowsy_groups), 
-                                ("Non Drowsy", non_drowsy_groups)]:
-        group_keys = list(groups.keys())
-        random.shuffle(group_keys)
+    # Greedily assign subjects to splits
+    for key in group_keys:
+        subj = groups[key]
+        all_subj_imgs = subj["drowsy"] + subj["non_drowsy"]
         
-        # Count total images to compute split points
-        total_images = sum(len(groups[k]) for k in group_keys)
-        train_target = int(total_images * config.TRAIN_RATIO)
-        val_target = int(total_images * config.VAL_RATIO)
+        if count < train_target:
+            raw_splits["train"].extend(all_subj_imgs)
+        elif count < train_target + val_target:
+            raw_splits["val"].extend(all_subj_imgs)
+        else:
+            raw_splits["test"].extend(all_subj_imgs)
+            
+        count += len(all_subj_imgs)
         
-        # Assign groups to splits
-        count = 0
-        for key in group_keys:
-            group_images = groups[key]
-            if count < train_target:
-                splits["train"].extend(group_images)
-            elif count < train_target + val_target:
-                splits["val"].extend(group_images)
-            else:
-                splits["test"].extend(group_images)
-            count += len(group_images)
+    # Apply strict 50/50 class balance for Val and Test sets only
+    balanced_splits = {"train": raw_splits["train"]}
     
-    # Shuffle within each split
-    for key in splits:
-        random.shuffle(splits[key])
+    for split_name in ["val", "test"]:
+        drowsy = [x for x in raw_splits[split_name] if x["label"] == 0]
+        non_drowsy = [x for x in raw_splits[split_name] if x["label"] == 1]
+        
+        # Balance by taking the minimum count
+        min_count = min(len(drowsy), len(non_drowsy))
+        
+        if min_count > 0:
+            drowsy = random.sample(drowsy, min_count)
+            non_drowsy = random.sample(non_drowsy, min_count)
+            
+        balanced_splits[split_name] = drowsy + non_drowsy
+
+    for key in balanced_splits:
+        random.shuffle(balanced_splits[key])
     
-    return splits
+    return balanced_splits
 
 
 def save_splits(splits: dict, path: str = config.SPLITS_FILE):
