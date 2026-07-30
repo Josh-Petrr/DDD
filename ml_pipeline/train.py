@@ -5,18 +5,14 @@ Supports 2-stage training:
   Stage 1: Frozen backbone — train only the head (fast convergence)
   Stage 2: Unfreeze backbone — fine-tune everything with lower LR
 
-Features: mixed precision (AMP), cosine LR scheduling, early stopping,
-          model checkpointing, CSV training logs.
-
-Usage:
-    from train import train_model
-    history = train_model(model, loaders, model_name="fusion")
+Supports FusionGRLModel with Adversarial Domain Adaptation.
 """
 
 import os
 import csv
 import time
 import copy
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -30,19 +26,12 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
                 device: torch.device = config.DEVICE) -> dict:
     """
     Train a model with 2-stage schedule.
-    
-    Args:
-        model: nn.Module (BaselineCNN, GeometricOnlyMLP, or FusionModel)
-        loaders: dict with 'train' and 'val' DataLoaders
-        model_name: string for checkpoint naming
-        device: torch device
-    
-    Returns:
-        history dict with training/validation metrics per epoch
     """
     model = model.to(device)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    domain_criterion = nn.CrossEntropyLoss()
+    
     scaler = GradScaler(device="cuda") if device.type == "cuda" else None
     
     history = {
@@ -66,7 +55,6 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     
     model.freeze_backbone()
     
-    # Only optimize parameters that require grad
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=config.STAGE1_LR,
                                   weight_decay=config.WEIGHT_DECAY)
@@ -75,11 +63,14 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     )
     
     for epoch in range(1, config.STAGE1_EPOCHS + 1):
-        metrics = _run_epoch(model, loaders, optimizer, criterion, scaler,
-                             scheduler, device, epoch, "Stage1")
+        # Progressively increase alpha for GRL from 0.0 to 1.0 over full training (Stage1 + Stage2)
+        p = float(epoch) / (config.STAGE1_EPOCHS + config.STAGE2_EPOCHS)
+        alpha = 2. / (1. + np.exp(-10 * p)) - 1
+        
+        metrics = _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
+                             scheduler, device, epoch, "Stage1", model_name, alpha)
         _update_history(history, epoch, "stage1", metrics, optimizer)
         
-        # Check for best model
         if metrics["val_acc"] > best_val_acc:
             best_val_acc = metrics["val_acc"]
             best_model_state = copy.deepcopy(model.state_dict())
@@ -96,7 +87,6 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     
     model.unfreeze_backbone()
     
-    # Differential learning rates: lower LR for backbone
     param_groups = _get_param_groups(model, model_name)
     optimizer = torch.optim.AdamW(param_groups, weight_decay=config.WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -108,11 +98,13 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     for epoch in range(1, config.STAGE2_EPOCHS + 1):
         global_epoch = config.STAGE1_EPOCHS + epoch
         
-        metrics = _run_epoch(model, loaders, optimizer, criterion, scaler,
-                             scheduler, device, epoch, "Stage2")
+        p = float(global_epoch) / (config.STAGE1_EPOCHS + config.STAGE2_EPOCHS)
+        alpha = 2. / (1. + np.exp(-10 * p)) - 1
+        
+        metrics = _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
+                             scheduler, device, epoch, "Stage2", model_name, alpha)
         _update_history(history, global_epoch, "stage2", metrics, optimizer)
         
-        # Check for best model
         if metrics["val_acc"] > best_val_acc:
             best_val_acc = metrics["val_acc"]
             best_model_state = copy.deepcopy(model.state_dict())
@@ -124,51 +116,61 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
                       f"(patience={config.EARLY_STOPPING_PATIENCE})")
                 break
     
-    # Save best model
     if best_model_state is not None:
         torch.save(best_model_state, checkpoint_path)
         print(f"\n✅ Best model saved: {checkpoint_path}")
         print(f"   Best val accuracy: {best_val_acc:.4f}")
-        
-        # Restore best weights
         model.load_state_dict(best_model_state)
     
-    # Save training history to CSV
     _save_history_csv(history, model_name)
-    
     return history
 
 
-def _run_epoch(model, loaders, optimizer, criterion, scaler,
-               scheduler, device, epoch, stage_name):
+def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
+               scheduler, device, epoch, stage_name, model_name, alpha):
     """Run one training + validation epoch."""
     
-    # ── Training ──
     model.train()
     train_loss = 0.0
     train_correct = 0
     train_total = 0
     
-    pbar = tqdm(loaders["train"], desc=f"  {stage_name} Epoch {epoch} [Train]",
-                leave=False)
+    pbar = tqdm(loaders["train"], desc=f"  {stage_name} Epoch {epoch} [Train]", leave=False)
     
-    for images, geo_features, labels in pbar:
+    for images, geo_features, labels, domain_labels in pbar:
         images = images.to(device, non_blocking=True)
         geo_features = geo_features.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+        domain_labels = domain_labels.to(device, non_blocking=True)
         
         optimizer.zero_grad()
         
         if scaler is not None:
             with autocast(device_type="cuda"):
-                outputs = model(images, geo_features)
-                loss = criterion(outputs, labels)
+                if model_name == "fusion_grl":
+                    drowsy_logits, domain_logits = model(images, geo_features, alpha)
+                    loss_drowsy = criterion(drowsy_logits, labels)
+                    loss_domain = domain_criterion(domain_logits, domain_labels)
+                    loss = loss_drowsy + loss_domain
+                    outputs = drowsy_logits
+                else:
+                    outputs = model(images, geo_features)
+                    loss = criterion(outputs, labels)
+                    
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
         else:
-            outputs = model(images, geo_features)
-            loss = criterion(outputs, labels)
+            if model_name == "fusion_grl":
+                drowsy_logits, domain_logits = model(images, geo_features, alpha)
+                loss_drowsy = criterion(drowsy_logits, labels)
+                loss_domain = domain_criterion(domain_logits, domain_labels)
+                loss = loss_drowsy + loss_domain
+                outputs = drowsy_logits
+            else:
+                outputs = model(images, geo_features)
+                loss = criterion(outputs, labels)
+                
             loss.backward()
             optimizer.step()
         
@@ -177,8 +179,7 @@ def _run_epoch(model, loaders, optimizer, criterion, scaler,
         train_correct += (preds == labels).sum().item()
         train_total += labels.size(0)
         
-        pbar.set_postfix(loss=f"{loss.item():.4f}", 
-                         acc=f"{100*train_correct/train_total:.1f}%")
+        pbar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{100*train_correct/train_total:.1f}%")
     
     scheduler.step()
     
@@ -189,18 +190,33 @@ def _run_epoch(model, loaders, optimizer, criterion, scaler,
     val_total = 0
     
     with torch.no_grad():
-        for images, geo_features, labels in loaders["val"]:
+        for images, geo_features, labels, domain_labels in loaders["val"]:
             images = images.to(device, non_blocking=True)
             geo_features = geo_features.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            domain_labels = domain_labels.to(device, non_blocking=True)
             
             if scaler is not None:
                 with autocast(device_type="cuda"):
+                    if model_name == "fusion_grl":
+                        drowsy_logits, domain_logits = model(images, geo_features, alpha)
+                        loss_drowsy = criterion(drowsy_logits, labels)
+                        loss_domain = domain_criterion(domain_logits, domain_labels)
+                        loss = loss_drowsy + loss_domain
+                        outputs = drowsy_logits
+                    else:
+                        outputs = model(images, geo_features)
+                        loss = criterion(outputs, labels)
+            else:
+                if model_name == "fusion_grl":
+                    drowsy_logits, domain_logits = model(images, geo_features, alpha)
+                    loss_drowsy = criterion(drowsy_logits, labels)
+                    loss_domain = domain_criterion(domain_logits, domain_labels)
+                    loss = loss_drowsy + loss_domain
+                    outputs = drowsy_logits
+                else:
                     outputs = model(images, geo_features)
                     loss = criterion(outputs, labels)
-            else:
-                outputs = model(images, geo_features)
-                loss = criterion(outputs, labels)
             
             val_loss += loss.item() * labels.size(0)
             _, preds = torch.max(outputs, 1)
@@ -223,16 +239,19 @@ def _run_epoch(model, loaders, optimizer, criterion, scaler,
 
 
 def _get_param_groups(model, model_name):
-    """Create parameter groups with differential learning rates."""
     if model_name == "geometric":
         return [{"params": model.parameters(), "lr": config.STAGE2_LR}]
     
     if model_name == "baseline":
         backbone_params = list(model.backbone.features.parameters())
         head_params = list(model.backbone.classifier.parameters())
-    elif model_name == "fusion":
+    elif model_name.startswith("fusion"):
         backbone_params = list(model.features.parameters())
+        
+        # Collect parameters from all heads
         head_params = list(model.fusion_head.parameters())
+        if hasattr(model, "domain_head"):
+            head_params += list(model.domain_head.parameters())
     else:
         return [{"params": model.parameters(), "lr": config.STAGE2_LR}]
     
@@ -243,7 +262,6 @@ def _get_param_groups(model, model_name):
 
 
 def _update_history(history, epoch, stage, metrics, optimizer):
-    """Append epoch metrics to history dict."""
     history["epoch"].append(epoch)
     history["stage"].append(stage)
     history["train_loss"].append(metrics["train_loss"])
@@ -254,9 +272,7 @@ def _update_history(history, epoch, stage, metrics, optimizer):
 
 
 def _save_history_csv(history, model_name):
-    """Save training history to CSV."""
     csv_path = os.path.join(config.RESULTS_DIR, f"{model_name}_history.csv")
-    
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "stage", "train_loss", "train_acc",
@@ -270,5 +286,4 @@ def _save_history_csv(history, model_name):
                 f"{history['val_acc'][i]:.6f}",
                 f"{history['lr'][i]:.8f}",
             ])
-    
     print(f"  Training history saved: {csv_path}")

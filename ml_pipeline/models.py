@@ -1,11 +1,13 @@
 """
-models.py — Three model architectures for drowsiness detection.
+models.py — Model architectures for drowsiness detection.
 
 1. BaselineCNN         — EfficientNet-B0 + classification head (no geometry)
 2. GeometricOnlyMLP    — Just the 4 landmark features through an MLP
 3. FusionModel         — EfficientNet-B0 embedding + geometric features → fusion MLP
+4. FusionGRLModel      — FusionModel + Gradient Reversal Layer for Domain Adaptation
 
 All models output 2-class logits [Drowsy, Non-Drowsy].
+FusionGRLModel outputs (drowsy_logits, domain_logits).
 """
 
 import torch
@@ -15,12 +17,26 @@ from torchvision import models
 import config
 
 
+class GradientReversalLayer(torch.autograd.Function):
+    """
+    Gradient Reversal Layer (GRL).
+    Forward pass is the identity function.
+    Backward pass multiplies the gradient by -alpha.
+    """
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        output = grad_output.neg() * ctx.alpha
+        return output, None
+
+
 class BaselineCNN(nn.Module):
     """
     EfficientNet-B0 with a simple classification head.
-    
-    This is the "before" model — pure CNN, no geometric features.
-    Used as the comparison baseline.
     """
     
     def __init__(self, num_classes: int = config.NUM_CLASSES, pretrained: bool = True):
@@ -44,8 +60,8 @@ class BaselineCNN(nn.Module):
         x = torch.flatten(x, 1)
         return x
     
-    def forward(self, images: torch.Tensor, geo_features: torch.Tensor = None):
-        """Forward pass. geo_features is ignored (kept for API compatibility)."""
+    def forward(self, images: torch.Tensor, geo_features: torch.Tensor = None, alpha: float = 1.0):
+        """Forward pass. geo_features and alpha are ignored."""
         return self.backbone(images)
     
     def freeze_backbone(self):
@@ -62,9 +78,6 @@ class BaselineCNN(nn.Module):
 class GeometricOnlyMLP(nn.Module):
     """
     Small MLP that uses only the 4 geometric features.
-    
-    This is the ablation model — shows what landmarks alone can do
-    without any visual features.
     """
     
     def __init__(self, num_features: int = config.NUM_GEOMETRIC_FEATURES,
@@ -86,12 +99,12 @@ class GeometricOnlyMLP(nn.Module):
         )
     
     def forward(self, images: torch.Tensor = None, 
-                geo_features: torch.Tensor = None):
-        """Forward pass. images is ignored."""
+                geo_features: torch.Tensor = None, alpha: float = 1.0):
+        """Forward pass. images and alpha are ignored."""
         return self.mlp(geo_features)
     
     def freeze_backbone(self):
-        pass  # No backbone to freeze
+        pass
     
     def unfreeze_backbone(self):
         pass
@@ -100,13 +113,6 @@ class GeometricOnlyMLP(nn.Module):
 class FusionModel(nn.Module):
     """
     Main model: EfficientNet-B0 embedding + geometric features → fusion MLP.
-    
-    Architecture:
-        CNN embedding (1280-d) + geometric features (4-d)
-        → Concatenate (1284-d)
-        → Linear(1284, 256) → BN → ReLU → Dropout
-        → Linear(256, 64)   → BN → ReLU → Dropout
-        → Linear(64, 2)
     """
     
     def __init__(self, num_classes: int = config.NUM_CLASSES, pretrained: bool = True):
@@ -144,47 +150,64 @@ class FusionModel(nn.Module):
         x = torch.flatten(x, 1)
         return x
     
-    def forward(self, images: torch.Tensor, geo_features: torch.Tensor):
-        """
-        Forward pass.
-        
-        Args:
-            images: (B, 3, 224, 224) image tensors
-            geo_features: (B, 4) geometric feature tensors
-        
-        Returns:
-            (B, 2) logits
-        """
-        # Extract CNN embedding
-        cnn_emb = self.get_embedding(images)  # (B, 1280)
-        
-        # Concatenate with geometric features
-        fused = torch.cat([cnn_emb, geo_features], dim=1)  # (B, 1284)
-        
-        # Fusion MLP
+    def forward(self, images: torch.Tensor, geo_features: torch.Tensor, alpha: float = 1.0):
+        """Forward pass."""
+        cnn_emb = self.get_embedding(images)
+        fused = torch.cat([cnn_emb, geo_features], dim=1)
         return self.fusion_head(fused)
     
     def freeze_backbone(self):
-        """Freeze EfficientNet feature extractor layers."""
         for param in self.features.parameters():
             param.requires_grad = False
     
     def unfreeze_backbone(self):
-        """Unfreeze all layers for fine-tuning."""
         for param in self.features.parameters():
             param.requires_grad = True
 
 
-def get_model(model_name: str, pretrained: bool = True) -> nn.Module:
+class FusionGRLModel(FusionModel):
+    """
+    FusionModel with an adversarial Gradient Reversal Layer for Domain Adaptation.
+    Forces the CNN to learn identity-invariant (domain-invariant) features.
+    """
+    def __init__(self, num_classes: int = config.NUM_CLASSES, num_domains: int = 10, pretrained: bool = True):
+        super().__init__(num_classes=num_classes, pretrained=pretrained)
+        
+        fusion_input_dim = config.EMBEDDING_DIM + config.NUM_GEOMETRIC_FEATURES
+        self.domain_head = nn.Sequential(
+            nn.Linear(fusion_input_dim, config.FUSION_HIDDEN_1),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_1),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE),
+            
+            nn.Linear(config.FUSION_HIDDEN_1, config.FUSION_HIDDEN_2),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE),
+            
+            nn.Linear(config.FUSION_HIDDEN_2, num_domains),
+        )
+        
+    def forward(self, images: torch.Tensor, geo_features: torch.Tensor, alpha: float = 1.0):
+        """
+        Returns (drowsy_logits, domain_logits).
+        """
+        cnn_emb = self.get_embedding(images)
+        fused = torch.cat([cnn_emb, geo_features], dim=1)
+        
+        # Primary Task: Drowsiness prediction
+        drowsy_logits = self.fusion_head(fused)
+        
+        # Adversarial Task: Domain (Subject) prediction via GRL
+        reversed_fused = GradientReversalLayer.apply(fused, alpha)
+        domain_logits = self.domain_head(reversed_fused)
+        
+        return drowsy_logits, domain_logits
+
+
+def get_model(model_name: str, pretrained: bool = True, num_domains: int = 0) -> nn.Module:
     """
     Factory function to create a model by name.
-    
-    Args:
-        model_name: one of 'baseline', 'geometric', 'fusion'
-        pretrained: whether to use ImageNet pretrained weights
-    
-    Returns:
-        nn.Module
     """
     model_name = model_name.lower()
     
@@ -194,15 +217,15 @@ def get_model(model_name: str, pretrained: bool = True) -> nn.Module:
         model = GeometricOnlyMLP()
     elif model_name == "fusion":
         model = FusionModel(pretrained=pretrained)
+    elif model_name == "fusion_grl":
+        model = FusionGRLModel(pretrained=pretrained, num_domains=num_domains)
     else:
-        raise ValueError(f"Unknown model: {model_name}. "
-                         f"Choose from: baseline, geometric, fusion")
+        raise ValueError(f"Unknown model: {model_name}. ")
     
     return model
 
 
 def count_parameters(model: nn.Module) -> dict:
-    """Count total and trainable parameters."""
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return {"total": total, "trainable": trainable}

@@ -1,7 +1,7 @@
 """
 generate_report.py — Generate all evaluation plots and summary report.
 
-Runs evaluation on all 3 models, produces comparison tables and plots,
+Runs evaluation on all 4 models, produces comparison tables and plots,
 and saves everything to the results/ directory.
 
 Usage:
@@ -42,11 +42,10 @@ plt.rcParams.update({
     "grid.alpha": 0.3,
     "font.size": 11,
 })
-COLORS = {"baseline": "#2196F3", "geometric": "#FF9800", "fusion": "#4CAF50"}
+COLORS = {"baseline": "#2196F3", "geometric": "#FF9800", "fusion": "#4CAF50", "fusion_grl": "#9C27B0"}
 
 
 def plot_training_curves(model_names: list):
-    """Plot training loss and accuracy curves for all models."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
     for name in model_names:
@@ -55,7 +54,8 @@ def plot_training_curves(model_names: list):
             continue
         
         df = pd.read_csv(csv_path)
-        color = COLORS.get(name, "gray")
+        base_name = name.rsplit("_", 1)[0]
+        color = COLORS.get(base_name, "gray")
         
         # Loss
         axes[0].plot(df["epoch"], df["train_loss"], 
@@ -87,7 +87,6 @@ def plot_training_curves(model_names: list):
 
 
 def plot_confusion_matrices(all_results: dict):
-    """Plot confusion matrices for all models side by side."""
     n = len(all_results)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 4))
     if n == 1:
@@ -115,7 +114,6 @@ def plot_confusion_matrices(all_results: dict):
 
 
 def plot_roc_curves(all_results: dict):
-    """Plot ROC curves for all models."""
     fig, ax = plt.subplots(figsize=(7, 6))
     
     for name, results in all_results.items():
@@ -124,8 +122,9 @@ def plot_roc_curves(all_results: dict):
         fpr = results["_roc"]["fpr"]
         tpr = results["_roc"]["tpr"]
         auc_score = results["roc_auc"]
+        base_name = name.rsplit("_", 1)[0]
         
-        ax.plot(fpr, tpr, color=COLORS.get(name, "gray"), linewidth=2,
+        ax.plot(fpr, tpr, color=COLORS.get(base_name, "gray"), linewidth=2,
                 label=f"{name} (AUC = {auc_score:.4f})")
     
     ax.plot([0, 1], [0, 1], "k--", alpha=0.3, label="Random")
@@ -142,44 +141,42 @@ def plot_roc_curves(all_results: dict):
 
 
 def plot_confidence_analysis(all_results: dict):
-    """Plot confidence-tiered comparison bar charts."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
-    # ── Chart 1: Tier distribution ──
     tier_names = ["High (>0.9)", "Medium (0.7–0.9)", "Low (<0.7)"]
     x = np.arange(len(tier_names))
-    width = 0.25
+    width = 0.2
     
     for i, (name, results) in enumerate(all_results.items()):
         tiers = results["confidence_tiers"]
         counts = [tiers[t]["pct_of_total"] * 100 for t in tier_names]
+        base_name = name.rsplit("_", 1)[0]
         axes[0].bar(x + i * width, counts, width, 
-                    label=name, color=COLORS.get(name, "gray"))
+                    label=name, color=COLORS.get(base_name, "gray"))
     
     axes[0].set_xlabel("Confidence Tier")
     axes[0].set_ylabel("% of Predictions")
     axes[0].set_title("Prediction Distribution by Confidence")
-    axes[0].set_xticks(x + width)
+    axes[0].set_xticks(x + width*1.5)
     axes[0].set_xticklabels(tier_names, fontsize=9)
     axes[0].legend()
     
-    # ── Chart 2: Accuracy by tier ──
     for i, (name, results) in enumerate(all_results.items()):
         tiers = results["confidence_tiers"]
         accs = [tiers[t]["accuracy"] * 100 for t in tier_names]
+        base_name = name.rsplit("_", 1)[0]
         axes[1].bar(x + i * width, accs, width,
-                    label=name, color=COLORS.get(name, "gray"))
+                    label=name, color=COLORS.get(base_name, "gray"))
     
     axes[1].set_xlabel("Confidence Tier")
     axes[1].set_ylabel("Accuracy (%)")
     axes[1].set_title("Accuracy by Confidence Tier")
-    axes[1].set_xticks(x + width)
+    axes[1].set_xticks(x + width*1.5)
     axes[1].set_xticklabels(tier_names, fontsize=9)
     axes[1].legend()
     axes[1].set_ylim(0, 105)
     
-    plt.suptitle("Confidence-Tiered Analysis — Where Does Fusion Help?",
-                 fontsize=14, fontweight="bold")
+    plt.suptitle("Confidence-Tiered Analysis", fontsize=14, fontweight="bold")
     plt.tight_layout()
     
     path = os.path.join(config.RESULTS_DIR, "confidence_analysis.png")
@@ -189,7 +186,6 @@ def plot_confidence_analysis(all_results: dict):
 
 
 def plot_confidence_distributions(all_results: dict):
-    """Plot histograms of prediction confidence for each model."""
     n = len(all_results)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 4))
     if n == 1:
@@ -203,7 +199,6 @@ def plot_confidence_distributions(all_results: dict):
         labels = results["_all_labels"]
         max_probs = np.max(probs, axis=1)
         
-        # Separate by class
         drowsy_conf = max_probs[labels == 0]
         non_drowsy_conf = max_probs[labels == 1]
         
@@ -228,7 +223,6 @@ def plot_confidence_distributions(all_results: dict):
 
 
 def create_summary_table(all_results: dict):
-    """Create a summary comparison CSV table."""
     rows = []
     for name, results in all_results.items():
         rows.append({
@@ -256,17 +250,15 @@ def main():
     print("GENERATING EVALUATION REPORT")
     print("=" * 60)
     
-    # ── Load data ──
     if not os.path.exists(config.SPLITS_FILE):
         print("ERROR: splits.json not found. Run train_all.py first.")
         sys.exit(1)
     
     splits = load_splits()
     geo_df = pd.read_csv(config.FEATURES_FILE)
-    loaders = create_dataloaders(splits, geo_df)
+    loaders, num_domains = create_dataloaders(splits, geo_df)
     
-    # ── Evaluate all models ──
-    model_names = ["baseline_2", "geometric_2", "fusion_2"]
+    model_names = ["baseline_3", "geometric_3", "fusion_3", "fusion_grl_3"]
     all_results = {}
     
     for name in model_names:
@@ -276,18 +268,22 @@ def main():
             continue
         
         print(f"\nEvaluating {name.upper()}...")
-        arch_name = name.replace("_2", "")
-        model = get_model(arch_name, pretrained=False)
+        arch_name = name.replace("_3", "")
+        model = get_model(arch_name, pretrained=False, num_domains=num_domains)
         model.load_state_dict(torch.load(checkpoint, map_location=config.DEVICE,
                                           weights_only=True))
         
         results = evaluate_model(model, loaders["test"], name)
         all_results[name] = results
         
-        # Generate Grad-CAM for CNN-based models
-        if name in ["baseline", "fusion"]:
+        if arch_name in ["baseline", "fusion", "fusion_grl"]:
             print(f"  Generating Grad-CAM for {name}...")
-            generate_gradcam_grid(model, loaders["test"], name)
+            # Note: For fusion_grl, generate_gradcam_grid will pass (images, geo_features) 
+            # and may need alpha=1.0 depending on how gradcam is implemented.
+            try:
+                generate_gradcam_grid(model, loaders["test"], name)
+            except Exception as e:
+                print(f"  Grad-CAM failed for {name}: {e}")
         
         del model
         if torch.cuda.is_available():
@@ -297,7 +293,6 @@ def main():
         print("No models evaluated. Exiting.")
         return
     
-    # ── Generate plots ──
     print("\n" + "─" * 40)
     print("Generating plots...")
     print("─" * 40)
@@ -309,7 +304,6 @@ def main():
     plot_confidence_distributions(all_results)
     create_summary_table(all_results)
     
-    # Save raw results
     save_results(all_results)
     
     print(f"\n{'='*60}")

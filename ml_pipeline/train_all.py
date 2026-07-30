@@ -1,10 +1,11 @@
 """
-train_all.py — Orchestrator to train all 3 model variants.
+train_all.py — Orchestrator to train all model variants.
 
 Runs sequentially:
   1. Baseline CNN (EfficientNet-B0 only)
   2. Geometric-only MLP (landmarks only)
   3. Fusion Model (CNN + landmarks)
+  4. Fusion GRL Model (Adversarial Domain Adaptation)
 
 Usage:
     python train_all.py
@@ -87,11 +88,16 @@ def main():
     print("Step 3: Creating DataLoaders")
     print("─" * 60)
     
-    loaders = create_dataloaders(splits, geo_df)
+    loaders, num_domains = create_dataloaders(splits, geo_df)
     
     # ── Step 4: Train all models ──
-    # (architecture_type, save_name) — save_name gets _2 suffix to preserve old checkpoints
-    model_configs = [("baseline", "baseline_2"), ("geometric", "geometric_2"), ("fusion", "fusion_2")]
+    # (architecture_type, save_name) — save_name gets _3 suffix for new iteration
+    model_configs = [
+        ("baseline", "baseline_3"), 
+        ("geometric", "geometric_3"), 
+        ("fusion", "fusion_3"),
+        ("fusion_grl", "fusion_grl_3")
+    ]
     histories = {}
     
     for arch_type, save_name in model_configs:
@@ -99,7 +105,7 @@ def main():
         print(f"# Training: {save_name.upper()}")
         print(f"{'#' * 60}")
         
-        model = get_model(arch_type, pretrained=True)
+        model = get_model(arch_type, pretrained=True, num_domains=num_domains)
         params = count_parameters(model)
         print(f"Parameters -- Total: {params['total']:,} | "
               f"Trainable: {params['trainable']:,}")

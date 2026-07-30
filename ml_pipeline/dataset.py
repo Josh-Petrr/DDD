@@ -2,7 +2,7 @@
 dataset.py — PyTorch Dataset for drowsiness detection.
 
 Handles image loading, augmentation, and geometric feature integration.
-Returns (image_tensor, geometric_features_tensor, label) tuples.
+Applies Subject Baseline Normalization and returns Domain Labels for GRL.
 """
 
 import os
@@ -16,34 +16,82 @@ from PIL import Image
 import config
 
 
+def get_subject_prefix(filename: str) -> str:
+    """Extract subject prefix from filename."""
+    name = os.path.splitext(filename)[0]
+    prefix = "".join(c for c in name if c.isalpha()).upper()
+    return prefix if prefix else "UNKNOWN"
+
+
 class DrowsinessDataset(Dataset):
     """
     Dataset that combines images with precomputed geometric features.
+    Applies Subject-Level Baseline Normalization.
     
     Args:
         split_items: list of dicts with 'filename', 'path', 'label'
         geometric_df: DataFrame with columns [filename, ear, mar, eyebrow_dist, 
                       head_tilt, success]
         augment: whether to apply training augmentations
+        subject_to_idx: mapping from subject string to integer domain label
     """
     
     def __init__(self, split_items: list, geometric_df: pd.DataFrame,
-                 augment: bool = False):
+                 augment: bool = False, subject_to_idx: dict = None):
         self.items = split_items
         self.augment = augment
+        self.subject_to_idx = subject_to_idx or {}
         
         # Build a lookup from filename → geometric features
         self.geo_lookup = {}
+        self.subject_stats = {}
+        
         if geometric_df is not None:
+            # Group features by subject to compute baselines
+            subject_values = {}
             for _, row in geometric_df.iterrows():
-                self.geo_lookup[row["filename"]] = {
+                fname = row["filename"]
+                subj = get_subject_prefix(fname)
+                
+                geo = {
                     "ear": float(row["ear"]),
                     "mar": float(row["mar"]),
                     "eyebrow_dist": float(row["eyebrow_dist"]),
                     "head_tilt": float(row["head_tilt"]),
                     "success": bool(row["success"]),
+                    "subject": subj
+                }
+                self.geo_lookup[fname] = geo
+                
+                if geo["success"]:
+                    if subj not in subject_values:
+                        subject_values[subj] = {"ear": [], "mar": [], "eyebrow_dist": [], "head_tilt": []}
+                    subject_values[subj]["ear"].append(geo["ear"])
+                    subject_values[subj]["mar"].append(geo["mar"])
+                    subject_values[subj]["eyebrow_dist"].append(geo["eyebrow_dist"])
+                    subject_values[subj]["head_tilt"].append(geo["head_tilt"])
+
+            # Compute 95th percentile (max baseline) for each subject
+            for subj, vals in subject_values.items():
+                self.subject_stats[subj] = {
+                    "ear_max": np.percentile(vals["ear"], 95) if vals["ear"] else 1e-6,
+                    "mar_max": np.percentile(vals["mar"], 95) if vals["mar"] else 1e-6,
+                    "eyebrow_max": np.percentile(vals["eyebrow_dist"], 95) if vals["eyebrow_dist"] else 1e-6,
+                    "head_tilt_max": np.percentile(vals["head_tilt"], 95) if vals["head_tilt"] else 1e-6,
                 }
         
+        # Global fallback stats if a subject is completely missing
+        if self.subject_stats:
+            self.global_ear_max = np.mean([s["ear_max"] for s in self.subject_stats.values()])
+            self.global_mar_max = np.mean([s["mar_max"] for s in self.subject_stats.values()])
+            self.global_eb_max = np.mean([s["eyebrow_max"] for s in self.subject_stats.values()])
+            self.global_tilt_max = np.mean([s["head_tilt_max"] for s in self.subject_stats.values()])
+        else:
+            self.global_ear_max = 1.0
+            self.global_mar_max = 1.0
+            self.global_eb_max = 1.0
+            self.global_tilt_max = 1.0
+
         # Image transforms
         if augment:
             self.transform = transforms.Compose([
@@ -65,33 +113,6 @@ class DrowsinessDataset(Dataset):
                 transforms.Normalize(mean=config.IMAGENET_MEAN, 
                                      std=config.IMAGENET_STD),
             ])
-        
-        # Compute geometric feature statistics for normalization
-        if self.geo_lookup:
-            ears = [v["ear"] for v in self.geo_lookup.values() if v["success"]]
-            mars = [v["mar"] for v in self.geo_lookup.values() if v["success"]]
-            ebds = [v["eyebrow_dist"] for v in self.geo_lookup.values() if v["success"]]
-            tilts = [v["head_tilt"] for v in self.geo_lookup.values() if v["success"]]
-            
-            self.geo_stats = {
-                "ear": (np.mean(ears), np.std(ears) + 1e-8),
-                "mar": (np.mean(mars), np.std(mars) + 1e-8),
-                "eyebrow_dist": (np.mean(ebds), np.std(ebds) + 1e-8),
-                "head_tilt": (np.mean(tilts), np.std(tilts) + 1e-8),
-            }
-        else:
-            self.geo_stats = {
-                "ear": (0.0, 1.0), "mar": (0.0, 1.0),
-                "eyebrow_dist": (0.0, 1.0), "head_tilt": (0.0, 1.0),
-            }
-    
-    def set_geo_stats(self, stats: dict):
-        """Set normalization stats (use training set stats for val/test)."""
-        self.geo_stats = stats
-    
-    def get_geo_stats(self) -> dict:
-        """Get computed normalization stats."""
-        return self.geo_stats
     
     def __len__(self):
         return len(self.items)
@@ -105,52 +126,75 @@ class DrowsinessDataset(Dataset):
         
         # Get geometric features
         filename = item["filename"]
+        subj = get_subject_prefix(filename)
+        domain_label = self.subject_to_idx.get(subj, 0)  # Default 0 if unseen in val/test
+        
         if filename in self.geo_lookup and self.geo_lookup[filename]["success"]:
             geo = self.geo_lookup[filename]
             raw_features = [geo["ear"], geo["mar"], 
                            geo["eyebrow_dist"], geo["head_tilt"]]
         else:
-            # Use mean values for failed detections (imputation)
-            raw_features = [
-                self.geo_stats["ear"][0],
-                self.geo_stats["mar"][0],
-                self.geo_stats["eyebrow_dist"][0],
-                self.geo_stats["head_tilt"][0],
+            # Use max baselines for failed detections (imputation)
+            stats = self.subject_stats.get(subj, None)
+            if stats is None:
+                raw_features = [self.global_ear_max, self.global_mar_max, 
+                                self.global_eb_max, self.global_tilt_max]
+            else:
+                raw_features = [stats["ear_max"], stats["mar_max"], 
+                                stats["eyebrow_max"], stats["head_tilt_max"]]
+        
+        # Subject Baseline Normalization
+        stats = self.subject_stats.get(subj, None)
+        if stats:
+            norm_features = [
+                raw_features[0] / stats["ear_max"],
+                raw_features[1] / stats["mar_max"],
+                raw_features[2] / stats["eyebrow_max"],
+                raw_features[3] / stats["head_tilt_max"],
             ]
+        else:
+            norm_features = [
+                raw_features[0] / self.global_ear_max,
+                raw_features[1] / self.global_mar_max,
+                raw_features[2] / self.global_eb_max,
+                raw_features[3] / self.global_tilt_max,
+            ]
+            
+        geo_tensor = torch.tensor(norm_features, dtype=torch.float32)
+        geo_tensor = torch.clamp(geo_tensor, min=0.0, max=2.0) # Normal scale around 0-1.0
         
-        # Z-score normalize geometric features
-        normalized = [
-            (raw_features[0] - self.geo_stats["ear"][0]) / self.geo_stats["ear"][1],
-            (raw_features[1] - self.geo_stats["mar"][0]) / self.geo_stats["mar"][1],
-            (raw_features[2] - self.geo_stats["eyebrow_dist"][0]) / self.geo_stats["eyebrow_dist"][1],
-            (raw_features[3] - self.geo_stats["head_tilt"][0]) / self.geo_stats["head_tilt"][1],
-        ]
-        
-        geo_tensor = torch.tensor(normalized, dtype=torch.float32)
-        geo_tensor = torch.clamp(geo_tensor, min=-3.0, max=3.0)
         label = torch.tensor(item["label"], dtype=torch.long)
+        domain_label = torch.tensor(domain_label, dtype=torch.long)
         
-        return image_tensor, geo_tensor, label
+        return image_tensor, geo_tensor, label, domain_label
 
 
 def create_dataloaders(splits: dict, geometric_df: pd.DataFrame,
                        batch_size: int = config.BATCH_SIZE) -> dict:
     """
     Create train/val/test DataLoaders from splits and geometric features.
+    Builds the subject-to-domain mapping from the training split.
     
-    Returns dict with 'train', 'val', 'test' DataLoaders.
+    Returns dict with 'train', 'val', 'test' DataLoaders and 'num_domains' integer.
     """
-    # Create datasets
-    train_ds = DrowsinessDataset(splits["train"], geometric_df, augment=True)
-    val_ds = DrowsinessDataset(splits["val"], geometric_df, augment=False)
-    test_ds = DrowsinessDataset(splits["test"], geometric_df, augment=False)
+    # 1. Extract all unique subjects in the training set for Domain Classification
+    train_subjects = set()
+    for item in splits["train"]:
+        subj = get_subject_prefix(item["filename"])
+        train_subjects.add(subj)
+        
+    train_subjects = sorted(list(train_subjects))
+    subject_to_idx = {subj: idx for idx, subj in enumerate(train_subjects)}
+    num_domains = len(train_subjects)
     
-    # Use training set stats for all splits
-    train_stats = train_ds.get_geo_stats()
-    val_ds.set_geo_stats(train_stats)
-    test_ds.set_geo_stats(train_stats)
+    print(f"\nExtracted {num_domains} unique subjects in Training set for GRL Domain Classification.")
     
-    # Create DataLoaders
+    # 2. Create datasets
+    train_ds = DrowsinessDataset(splits["train"], geometric_df, augment=True, subject_to_idx=subject_to_idx)
+    val_ds = DrowsinessDataset(splits["val"], geometric_df, augment=False, subject_to_idx=subject_to_idx)
+    test_ds = DrowsinessDataset(splits["test"], geometric_df, augment=False, subject_to_idx=subject_to_idx)
+    
+    # 3. Create DataLoaders
     loaders = {
         "train": torch.utils.data.DataLoader(
             train_ds, batch_size=batch_size, shuffle=True,
@@ -171,4 +215,4 @@ def create_dataloaders(splits: dict, geometric_df: pd.DataFrame,
     print(f"  Val:   {len(val_ds)} images, {len(loaders['val'])} batches")
     print(f"  Test:  {len(test_ds)} images, {len(loaders['test'])} batches")
     
-    return loaders
+    return loaders, num_domains

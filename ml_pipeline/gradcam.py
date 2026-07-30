@@ -3,10 +3,6 @@ gradcam.py — Grad-CAM visualization for the CNN models.
 
 Generates attention heatmaps showing where the EfficientNet-B0 focuses
 when making drowsiness predictions.
-
-Usage:
-    from gradcam import generate_gradcam_grid
-    generate_gradcam_grid(model, test_loader, "fusion")
 """
 
 import os
@@ -25,28 +21,16 @@ import config
 class GradCAM:
     """
     Grad-CAM implementation for EfficientNet-B0 based models.
-    
-    Hooks into the last convolutional layer to produce class-discriminative
-    heatmaps.
     """
     
     def __init__(self, model, target_layer=None):
-        """
-        Args:
-            model: BaselineCNN or FusionModel
-            target_layer: the conv layer to hook. Defaults to the last 
-                         EfficientNet features block.
-        """
         self.model = model
         self.model.eval()
         
-        # Default: last features block
         if target_layer is None:
             if hasattr(model, 'backbone'):
-                # BaselineCNN
                 target_layer = model.backbone.features[-1]
             elif hasattr(model, 'features'):
-                # FusionModel
                 target_layer = model.features[-1]
             else:
                 raise ValueError("Cannot auto-detect target layer")
@@ -55,7 +39,6 @@ class GradCAM:
         self.gradients = None
         self.activations = None
         
-        # Register hooks
         self._register_hooks()
     
     def _register_hooks(self):
@@ -72,51 +55,35 @@ class GradCAM:
                  geo_features: torch.Tensor,
                  target_class: int = None,
                  device: torch.device = config.DEVICE) -> np.ndarray:
-        """
-        Generate Grad-CAM heatmap for a single image.
-        
-        Args:
-            image_tensor: (1, 3, 224, 224)
-            geo_features: (1, 4)
-            target_class: class to explain (None = predicted class)
-            device: torch device
-        
-        Returns:
-            heatmap as numpy array (H, W), values in [0, 1]
-        """
         image_tensor = image_tensor.to(device)
         geo_features = geo_features.to(device)
         
-        # Forward pass
         self.model.zero_grad()
-        output = self.model(image_tensor, geo_features)
+        if hasattr(self.model, 'domain_head'):
+            output, _ = self.model(image_tensor, geo_features)
+        else:
+            output = self.model(image_tensor, geo_features)
         
         if target_class is None:
             target_class = output.argmax(dim=1).item()
         
-        # Backward pass for target class
         target_score = output[0, target_class]
         target_score.backward()
         
-        # Compute Grad-CAM
-        gradients = self.gradients[0]     # (C, H, W)
-        activations = self.activations[0]  # (C, H, W)
+        gradients = self.gradients[0]
+        activations = self.activations[0]
         
-        # Global average pooling of gradients
-        weights = gradients.mean(dim=(1, 2))  # (C,)
+        weights = gradients.mean(dim=(1, 2))
         
-        # Weighted sum of activations
         cam = torch.zeros(activations.shape[1:], device=device)
         for i, w in enumerate(weights):
             cam += w * activations[i]
         
-        # ReLU and normalize
         cam = F.relu(cam)
         cam = cam - cam.min()
         if cam.max() > 0:
             cam = cam / cam.max()
         
-        # Resize to input image size
         cam = cam.cpu().numpy()
         cam = cv2.resize(cam, (config.IMG_SIZE, config.IMG_SIZE))
         
@@ -124,7 +91,6 @@ class GradCAM:
 
 
 def _denormalize_image(image_tensor: torch.Tensor) -> np.ndarray:
-    """Convert normalized tensor back to displayable image."""
     mean = torch.tensor(config.IMAGENET_MEAN).view(3, 1, 1)
     std = torch.tensor(config.IMAGENET_STD).view(3, 1, 1)
     
@@ -136,7 +102,6 @@ def _denormalize_image(image_tensor: torch.Tensor) -> np.ndarray:
 
 def create_overlay(image: np.ndarray, heatmap: np.ndarray, 
                    alpha: float = 0.4) -> np.ndarray:
-    """Overlay heatmap on original image."""
     heatmap_colored = cv2.applyColorMap(
         (heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
     )
@@ -149,30 +114,26 @@ def create_overlay(image: np.ndarray, heatmap: np.ndarray,
 def generate_gradcam_grid(model, test_loader, model_name: str,
                           num_samples: int = 8,
                           device: torch.device = config.DEVICE):
-    """
-    Generate a grid of Grad-CAM visualizations and save to results/.
-    
-    Shows num_samples/2 correct Drowsy and num_samples/2 correct Non-Drowsy
-    predictions with their attention maps.
-    """
     import matplotlib.pyplot as plt
     
     model = model.to(device)
     grad_cam = GradCAM(model)
     
-    # Collect samples: correct predictions from each class
     samples = {"Drowsy": [], "Non Drowsy": []}
     target_per_class = num_samples // 2
     
     model.eval()
-    for images, geo_features, labels in test_loader:
+    for images, geo_features, labels, domain_labels in test_loader:
         for i in range(images.size(0)):
             img = images[i].unsqueeze(0)
             geo = geo_features[i].unsqueeze(0)
             label = labels[i].item()
             
             with torch.no_grad():
-                output = model(img.to(device), geo.to(device))
+                if hasattr(model, 'domain_head'):
+                    output, _ = model(img.to(device), geo.to(device))
+                else:
+                    output = model(img.to(device), geo.to(device))
                 pred = output.argmax(dim=1).item()
             
             class_name = config.CLASS_NAMES[label]
@@ -191,14 +152,12 @@ def generate_gradcam_grid(model, test_loader, model_name: str,
                     "confidence": prob,
                 })
             
-            # Check if we have enough
             if all(len(v) >= target_per_class for v in samples.values()):
                 break
         
         if all(len(v) >= target_per_class for v in samples.values()):
             break
     
-    # Create figure
     all_samples = samples["Drowsy"] + samples["Non Drowsy"]
     n = len(all_samples)
     
@@ -214,18 +173,15 @@ def generate_gradcam_grid(model, test_loader, model_name: str,
                  fontsize=16, fontweight="bold", y=1.02)
     
     for i, sample in enumerate(all_samples):
-        # Original
         axes[i, 0].imshow(sample["original"])
         axes[i, 0].set_title(f"{sample['label']}\n({sample['confidence']:.1%} conf.)",
                              fontsize=10)
         axes[i, 0].axis("off")
         
-        # Heatmap
         axes[i, 1].imshow(sample["heatmap"], cmap="jet")
         axes[i, 1].set_title("Attention Map", fontsize=10)
         axes[i, 1].axis("off")
         
-        # Overlay
         axes[i, 2].imshow(sample["overlay"])
         axes[i, 2].set_title("Overlay", fontsize=10)
         axes[i, 2].axis("off")

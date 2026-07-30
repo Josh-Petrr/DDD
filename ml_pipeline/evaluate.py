@@ -7,10 +7,6 @@ Computes:
   - Confusion matrix
   - Confidence-tiered analysis (High/Medium/Low)
   - Per-image predictions with confidence scores
-
-Usage:
-    from evaluate import evaluate_model
-    results = evaluate_model(model, test_loader, "fusion")
 """
 
 import os
@@ -33,9 +29,6 @@ def evaluate_model(model: torch.nn.Module, test_loader,
                    device: torch.device = config.DEVICE) -> dict:
     """
     Run comprehensive evaluation on the test set.
-    
-    Returns dict with all metrics, per-image predictions, and
-    confidence-tiered breakdown.
     """
     model = model.to(device)
     model.eval()
@@ -45,15 +38,21 @@ def evaluate_model(model: torch.nn.Module, test_loader,
     all_probs = []  # softmax probabilities
     
     with torch.no_grad():
-        for images, geo_features, labels in test_loader:
+        for images, geo_features, labels, domain_labels in test_loader:
             images = images.to(device, non_blocking=True)
             geo_features = geo_features.to(device, non_blocking=True)
             
             if device.type == "cuda":
                 with autocast(device_type="cuda"):
-                    outputs = model(images, geo_features)
+                    if model_name.startswith("fusion_grl"):
+                        outputs, _ = model(images, geo_features)
+                    else:
+                        outputs = model(images, geo_features)
             else:
-                outputs = model(images, geo_features)
+                if model_name.startswith("fusion_grl"):
+                    outputs, _ = model(images, geo_features)
+                else:
+                    outputs = model(images, geo_features)
             
             probs = F.softmax(outputs, dim=1)
             _, preds = torch.max(probs, 1)
@@ -74,20 +73,12 @@ def evaluate_model(model: torch.nn.Module, test_loader,
     cm = confusion_matrix(all_labels, all_preds)
     
     # ── APCER / BPCER / ACER ──
-    # In drowsiness context:
-    #   Attack = Drowsy (label 0) — the dangerous state we must catch
-    #   Bonafide = Non-Drowsy (label 1)
-    # APCER = attack presentations incorrectly classified as bonafide (miss rate)
-    # BPCER = bonafide presentations incorrectly classified as attack (false alarm)
-    
-    # Drowsy classified as Non-Drowsy (missed drowsiness — dangerous!)
     drowsy_mask = all_labels == 0
     if drowsy_mask.sum() > 0:
         apcer = (all_preds[drowsy_mask] != 0).sum() / drowsy_mask.sum()
     else:
         apcer = 0.0
     
-    # Non-Drowsy classified as Drowsy (false alarm — annoying but safe)
     non_drowsy_mask = all_labels == 1
     if non_drowsy_mask.sum() > 0:
         bpcer = (all_preds[non_drowsy_mask] != 1).sum() / non_drowsy_mask.sum()
@@ -101,11 +92,9 @@ def evaluate_model(model: torch.nn.Module, test_loader,
     tiers = _compute_confidence_tiers(all_labels, all_preds, max_probs)
     
     # ── ROC curve data ──
-    # Use probability of class 0 (Drowsy) as the positive score
     fpr, tpr, roc_thresholds = roc_curve(all_labels, all_probs[:, 0], pos_label=0)
     roc_auc = auc(fpr, tpr)
     
-    # Precision-Recall curve
     pr_precision, pr_recall, pr_thresholds = precision_recall_curve(
         all_labels, all_probs[:, 0], pos_label=0
     )
@@ -124,7 +113,6 @@ def evaluate_model(model: torch.nn.Module, test_loader,
         "roc_auc": float(roc_auc),
         "pr_auc": float(pr_auc),
         "confidence_tiers": tiers,
-        # Arrays for plotting (not serialized to JSON)
         "_roc": {"fpr": fpr, "tpr": tpr},
         "_pr": {"precision": pr_precision, "recall": pr_recall},
         "_all_probs": all_probs,
@@ -138,22 +126,12 @@ def evaluate_model(model: torch.nn.Module, test_loader,
 
 
 def _compute_confidence_tiers(labels, preds, max_probs):
-    """
-    Bucket predictions into confidence tiers and compute accuracy per tier.
-    
-    Tiers:
-      High:   confidence > 0.9
-      Medium: 0.7 <= confidence <= 0.9
-      Low:    confidence < 0.7
-    """
     tiers = {}
-    
     boundaries = [
         ("High (>0.9)", max_probs > 0.9),
         ("Medium (0.7–0.9)", (max_probs >= 0.7) & (max_probs <= 0.9)),
         ("Low (<0.7)", max_probs < 0.7),
     ]
-    
     for tier_name, mask in boundaries:
         n = mask.sum()
         if n > 0:
@@ -169,16 +147,13 @@ def _compute_confidence_tiers(labels, preds, max_probs):
             "correct": int(tier_correct),
             "pct_of_total": float(n / len(labels)) if len(labels) > 0 else 0.0,
         }
-    
     return tiers
 
 
 def _print_results(results):
-    """Pretty-print evaluation results."""
     print(f"\n{'='*60}")
     print(f"EVALUATION RESULTS: {results['model_name'].upper()}")
     print(f"{'='*60}")
-    
     print(f"\n  Accuracy:   {100*results['accuracy']:.2f}%")
     print(f"  Precision:  {100*results['precision']:.2f}%")
     print(f"  Recall:     {100*results['recall']:.2f}%")
@@ -206,7 +181,6 @@ def _print_results(results):
 
 
 def save_results(all_results: dict, path: str = None):
-    """Save evaluation results to JSON (excludes numpy arrays)."""
     if path is None:
         path = os.path.join(config.RESULTS_DIR, "evaluation_results.json")
     
@@ -214,7 +188,7 @@ def save_results(all_results: dict, path: str = None):
     for model_name, results in all_results.items():
         serializable[model_name] = {
             k: v for k, v in results.items() 
-            if not k.startswith("_")  # Skip numpy arrays
+            if not k.startswith("_")
         }
     
     with open(path, 'w') as f:
