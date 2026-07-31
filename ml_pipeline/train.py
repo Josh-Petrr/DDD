@@ -154,7 +154,8 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                     loss = loss_drowsy + loss_domain
                     outputs = drowsy_logits
                 else:
-                    outputs = model(images, geo_features)
+                    out = model(images, geo_features)
+                    outputs = out[0] if isinstance(out, (tuple, list)) else out
                     loss = criterion(outputs, labels)
                     
             scaler.scale(loss).backward()
@@ -168,7 +169,8 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                 loss = loss_drowsy + loss_domain
                 outputs = drowsy_logits
             else:
-                outputs = model(images, geo_features)
+                out = model(images, geo_features)
+                outputs = out[0] if isinstance(out, (tuple, list)) else out
                 loss = criterion(outputs, labels)
                 
             loss.backward()
@@ -205,7 +207,8 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                         loss = loss_drowsy + loss_domain
                         outputs = drowsy_logits
                     else:
-                        outputs = model(images, geo_features)
+                        out = model(images, geo_features)
+                        outputs = out[0] if isinstance(out, (tuple, list)) else out
                         loss = criterion(outputs, labels)
             else:
                 if model_name == "fusion_grl":
@@ -215,7 +218,8 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                     loss = loss_drowsy + loss_domain
                     outputs = drowsy_logits
                 else:
-                    outputs = model(images, geo_features)
+                    out = model(images, geo_features)
+                    outputs = out[0] if isinstance(out, (tuple, list)) else out
                     loss = criterion(outputs, labels)
             
             val_loss += loss.item() * labels.size(0)

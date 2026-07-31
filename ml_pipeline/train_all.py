@@ -21,7 +21,7 @@ import pandas as pd
 import numpy as np
 import random
 
-import config
+from ml_pipeline import config
 from data_split import create_subject_disjoint_split, save_splits, \
     load_splits, print_split_summary
 from dataset import create_dataloaders

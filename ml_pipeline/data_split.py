@@ -15,7 +15,7 @@ import random
 import numpy as np
 from collections import defaultdict
 
-import config
+from ml_pipeline import config
 
 
 def _parse_all_subjects() -> dict:

@@ -19,7 +19,7 @@ import time
 import cv2
 from tqdm import tqdm
 
-import config
+from ml_pipeline import config
 from landmark_features import LandmarkExtractor
 
 
