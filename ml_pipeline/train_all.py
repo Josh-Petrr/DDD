@@ -93,9 +93,6 @@ def main():
     # ── Step 4: Train all models ──
     # (architecture_type, save_name) — save_name gets _3 suffix for new iteration
     model_configs = [
-        ("baseline", "baseline_3"), 
-        ("geometric", "geometric_3"), 
-        ("fusion", "fusion_3"),
         ("fusion_grl", "fusion_grl_3")
     ]
     histories = {}

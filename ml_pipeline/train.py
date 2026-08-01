@@ -63,9 +63,9 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     )
     
     for epoch in range(1, config.STAGE1_EPOCHS + 1):
-        # Progressively increase alpha for GRL from 0.0 to 1.0 over full training (Stage1 + Stage2)
+        # Progressively increase alpha for GRL from 0.0 to 1.0, but scale down by 0.05
         p = float(epoch) / (config.STAGE1_EPOCHS + config.STAGE2_EPOCHS)
-        alpha = 2. / (1. + np.exp(-10 * p)) - 1
+        alpha = (2. / (1. + np.exp(-10 * p)) - 1) * 0.05
         
         metrics = _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                              scheduler, device, epoch, "Stage1", model_name, alpha)
@@ -99,7 +99,7 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
         global_epoch = config.STAGE1_EPOCHS + epoch
         
         p = float(global_epoch) / (config.STAGE1_EPOCHS + config.STAGE2_EPOCHS)
-        alpha = 2. / (1. + np.exp(-10 * p)) - 1
+        alpha = (2. / (1. + np.exp(-10 * p)) - 1) * 0.05
         
         metrics = _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                              scheduler, device, epoch, "Stage2", model_name, alpha)
@@ -147,7 +147,7 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
         
         if scaler is not None:
             with autocast(device_type="cuda"):
-                if model_name == "fusion_grl":
+                if model_name.startswith("fusion_grl"):
                     drowsy_logits, domain_logits = model(images, geo_features, alpha)
                     loss_drowsy = criterion(drowsy_logits, labels)
                     loss_domain = domain_criterion(domain_logits, domain_labels)
@@ -161,7 +161,7 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
             scaler.step(optimizer)
             scaler.update()
         else:
-            if model_name == "fusion_grl":
+            if model_name.startswith("fusion_grl"):
                 drowsy_logits, domain_logits = model(images, geo_features, alpha)
                 loss_drowsy = criterion(drowsy_logits, labels)
                 loss_domain = domain_criterion(domain_logits, domain_labels)
@@ -198,7 +198,7 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
             
             if scaler is not None:
                 with autocast(device_type="cuda"):
-                    if model_name == "fusion_grl":
+                    if model_name.startswith("fusion_grl"):
                         drowsy_logits, domain_logits = model(images, geo_features, alpha)
                         loss_drowsy = criterion(drowsy_logits, labels)
                         loss_domain = domain_criterion(domain_logits, domain_labels)
@@ -208,7 +208,7 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
                         outputs = model(images, geo_features)
                         loss = criterion(outputs, labels)
             else:
-                if model_name == "fusion_grl":
+                if model_name.startswith("fusion_grl"):
                     drowsy_logits, domain_logits = model(images, geo_features, alpha)
                     loss_drowsy = criterion(drowsy_logits, labels)
                     loss_domain = domain_criterion(domain_logits, domain_labels)
