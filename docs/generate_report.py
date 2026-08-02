@@ -258,8 +258,16 @@ def main():
     geo_df = pd.read_csv(config.FEATURES_FILE)
     loaders, num_domains = create_dataloaders(splits, geo_df)
     
-    model_names = ["baseline_3", "geometric_3", "fusion_3", "fusion_grl_3"]
+    model_names = ["fusion_grl_4"]
     all_results = {}
+    
+    arch_mapping = {
+        "baseline_3": "baseline",
+        "geometric_3": "geometric",
+        "fusion_3": "fusion",
+        "fusion_grl_3": "fusion_grl",
+        "fusion_grl_4": "fusion_grl_v4"
+    }
     
     for name in model_names:
         checkpoint = os.path.join(config.CHECKPOINTS_DIR, f"{name}_best.pth")
@@ -268,7 +276,7 @@ def main():
             continue
         
         print(f"\nEvaluating {name.upper()}...")
-        arch_name = name.replace("_3", "")
+        arch_name = arch_mapping.get(name, name)
         model = get_model(arch_name, pretrained=False, num_domains=num_domains)
         model.load_state_dict(torch.load(checkpoint, map_location=config.DEVICE,
                                           weights_only=True))

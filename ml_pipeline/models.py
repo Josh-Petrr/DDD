@@ -73,6 +73,14 @@ class BaselineCNN(nn.Module):
         """Unfreeze all layers for fine-tuning."""
         for param in self.backbone.features.parameters():
             param.requires_grad = True
+            
+    def unfreeze_backbone_partial(self, num_blocks: int = 3):
+        """Unfreeze only the last N blocks of the EfficientNet backbone."""
+        self.freeze_backbone()
+        total_blocks = len(self.backbone.features)
+        for i in range(max(0, total_blocks - num_blocks), total_blocks):
+            for param in self.backbone.features[i].parameters():
+                param.requires_grad = True
 
 
 class GeometricOnlyMLP(nn.Module):
@@ -163,6 +171,14 @@ class FusionModel(nn.Module):
     def unfreeze_backbone(self):
         for param in self.features.parameters():
             param.requires_grad = True
+            
+    def unfreeze_backbone_partial(self, num_blocks: int = 3):
+        """Unfreeze only the last N blocks of the EfficientNet backbone."""
+        self.freeze_backbone()
+        total_blocks = len(self.features)
+        for i in range(max(0, total_blocks - num_blocks), total_blocks):
+            for param in self.features[i].parameters():
+                param.requires_grad = True
 
 
 class FusionGRLModel(FusionModel):
@@ -205,6 +221,53 @@ class FusionGRLModel(FusionModel):
         return drowsy_logits, domain_logits
 
 
+class FusionGRLv4Model(FusionModel):
+    """
+    V4 Model: Higher dropout rate (0.5) to combat identity memorization.
+    """
+    def __init__(self, num_classes: int = config.NUM_CLASSES, num_domains: int = 10, pretrained: bool = True):
+        super().__init__(num_classes=num_classes, pretrained=pretrained)
+        
+        fusion_input_dim = config.EMBEDDING_DIM + config.NUM_GEOMETRIC_FEATURES
+        
+        # Override the fusion head with v4 dropout
+        self.fusion_head = nn.Sequential(
+            nn.Linear(fusion_input_dim, config.FUSION_HIDDEN_1),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_1),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE_V4),
+            nn.Linear(config.FUSION_HIDDEN_1, config.FUSION_HIDDEN_2),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE_V4),
+            nn.Linear(config.FUSION_HIDDEN_2, num_classes),
+        )
+        
+        # Domain head with v4 dropout
+        self.domain_head = nn.Sequential(
+            nn.Linear(fusion_input_dim, config.FUSION_HIDDEN_1),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_1),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE_V4),
+            nn.Linear(config.FUSION_HIDDEN_1, config.FUSION_HIDDEN_2),
+            nn.BatchNorm1d(config.FUSION_HIDDEN_2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=config.DROPOUT_RATE_V4),
+            nn.Linear(config.FUSION_HIDDEN_2, num_domains),
+        )
+        
+    def forward(self, images: torch.Tensor, geo_features: torch.Tensor, alpha: float = 1.0):
+        cnn_emb = self.get_embedding(images)
+        fused = torch.cat([cnn_emb, geo_features], dim=1)
+        
+        drowsy_logits = self.fusion_head(fused)
+        
+        reversed_fused = GradientReversalLayer.apply(fused, alpha)
+        domain_logits = self.domain_head(reversed_fused)
+        
+        return drowsy_logits, domain_logits
+
+
 def get_model(model_name: str, pretrained: bool = True, num_domains: int = 0) -> nn.Module:
     """
     Factory function to create a model by name.
@@ -219,6 +282,8 @@ def get_model(model_name: str, pretrained: bool = True, num_domains: int = 0) ->
         model = FusionModel(pretrained=pretrained)
     elif model_name == "fusion_grl":
         model = FusionGRLModel(pretrained=pretrained, num_domains=num_domains)
+    elif model_name == "fusion_grl_v4":
+        model = FusionGRLv4Model(pretrained=pretrained, num_domains=num_domains)
     else:
         raise ValueError(f"Unknown model: {model_name}. ")
     

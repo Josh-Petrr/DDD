@@ -101,8 +101,11 @@ class DrowsinessDataset(Dataset):
                 transforms.ColorJitter(brightness=0.2, contrast=0.2, 
                                        saturation=0.1, hue=0.05),
                 transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+                transforms.RandomPerspective(distortion_scale=0.1, p=0.3),
+                transforms.RandomGrayscale(p=0.3),
+                transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),
                 transforms.ToTensor(),
-                transforms.RandomErasing(p=0.25, scale=(0.02, 0.15), value='random'),
+                transforms.RandomErasing(p=0.4, scale=(0.02, 0.25), value='random'),
                 transforms.Normalize(mean=config.IMAGENET_MEAN, 
                                      std=config.IMAGENET_STD),
             ])

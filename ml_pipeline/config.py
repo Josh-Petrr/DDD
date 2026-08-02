@@ -68,6 +68,7 @@ STAGE2_LR = 1e-4
 STAGE2_BACKBONE_LR = 1e-5     # Lower LR for pretrained layers
 
 WEIGHT_DECAY = 1e-3
+WEIGHT_DECAY_V4 = 5e-3
 EARLY_STOPPING_PATIENCE = 5
 
 # ──────────────────────────────────────────────
@@ -77,6 +78,7 @@ EMBEDDING_DIM = 1280           # EfficientNet-B0 output dim
 FUSION_HIDDEN_1 = 256
 FUSION_HIDDEN_2 = 64
 DROPOUT_RATE = 0.3
+DROPOUT_RATE_V4 = 0.5
 
 # ──────────────────────────────────────────────
 # Geometric-only MLP (for ablation)

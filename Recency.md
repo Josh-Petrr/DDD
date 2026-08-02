@@ -11,3 +11,9 @@ When generating the next evaluation report (or running `generate_report.py`), pl
 Before generating the final report, make sure to update the path constants so the scripts pull from the newest directories:
 1. Update checkpoint loading paths to target `assets/checkpoints/{wherever saved}/`.
 2. Update the results saving/loading paths to target `results/{wherever you want to save}/`.
+
+## Task 5 Updates
+- Model: assets/checkpoints/fusion_grl_4_best.pth
+- Results: results/evaluation_results.json
+- Documentation: docs/task/task_5.md
+

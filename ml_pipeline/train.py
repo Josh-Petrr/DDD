@@ -22,6 +22,32 @@ from tqdm import tqdm
 import config
 
 
+def rand_bbox(size, lam):
+    W, H = size[2], size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = int(W * cut_rat)
+    cut_h = int(H * cut_rat)
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+    return bbx1, bby1, bbx2, bby2
+
+
+def cutmix_data(x, y, domain_y, alpha=1.0):
+    lam = np.random.beta(alpha, alpha) if alpha > 0 else 1
+    batch_size = x.size()[0]
+    index = torch.randperm(batch_size).to(x.device)
+    y_a, y_b = y, y[index]
+    domain_a, domain_b = domain_y, domain_y[index]
+    bbx1, bby1, bbx2, bby2 = rand_bbox(x.size(), lam)
+    x[:, :, bbx1:bbx2, bby1:bby2] = x[index, :, bbx1:bbx2, bby1:bby2]
+    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))
+    return x, y_a, y_b, domain_a, domain_b, lam, index
+
+
 def train_model(model: nn.Module, loaders: dict, model_name: str,
                 device: torch.device = config.DEVICE) -> dict:
     """
@@ -85,7 +111,10 @@ def train_model(model: nn.Module, loaders: dict, model_name: str,
     print(f"STAGE 2: Unfrozen backbone — fine-tuning all layers")
     print(f"{'='*60}")
     
-    model.unfreeze_backbone()
+    if model_name == "fusion_grl_v4":
+        model.unfreeze_backbone_partial(num_blocks=3)
+    else:
+        model.unfreeze_backbone()
     
     param_groups = _get_param_groups(model, model_name)
     optimizer = torch.optim.AdamW(param_groups, weight_decay=config.WEIGHT_DECAY)
@@ -145,12 +174,24 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
         
         optimizer.zero_grad()
         
+        use_cutmix = False
+        if stage_name.startswith("Stage") and model_name == "fusion_grl_v4" and np.random.rand() < 0.5:
+            use_cutmix = True
+            images, labels_a, labels_b, domains_a, domains_b, lam, index = cutmix_data(images, labels, domain_labels)
+            geo_features = geo_features * lam + geo_features[index] * (1. - lam)
+        
         if scaler is not None:
             with autocast(device_type="cuda"):
                 if model_name.startswith("fusion_grl"):
                     drowsy_logits, domain_logits = model(images, geo_features, alpha)
-                    loss_drowsy = criterion(drowsy_logits, labels)
-                    loss_domain = domain_criterion(domain_logits, domain_labels)
+                    
+                    if use_cutmix:
+                        loss_drowsy = criterion(drowsy_logits, labels_a) * lam + criterion(drowsy_logits, labels_b) * (1. - lam)
+                        loss_domain = domain_criterion(domain_logits, domains_a) * lam + domain_criterion(domain_logits, domains_b) * (1. - lam)
+                    else:
+                        loss_drowsy = criterion(drowsy_logits, labels)
+                        loss_domain = domain_criterion(domain_logits, domain_labels)
+                        
                     loss = loss_drowsy + loss_domain
                     outputs = drowsy_logits
                 else:
@@ -163,8 +204,14 @@ def _run_epoch(model, loaders, optimizer, criterion, domain_criterion, scaler,
         else:
             if model_name.startswith("fusion_grl"):
                 drowsy_logits, domain_logits = model(images, geo_features, alpha)
-                loss_drowsy = criterion(drowsy_logits, labels)
-                loss_domain = domain_criterion(domain_logits, domain_labels)
+                
+                if use_cutmix:
+                    loss_drowsy = criterion(drowsy_logits, labels_a) * lam + criterion(drowsy_logits, labels_b) * (1. - lam)
+                    loss_domain = domain_criterion(domain_logits, domains_a) * lam + domain_criterion(domain_logits, domains_b) * (1. - lam)
+                else:
+                    loss_drowsy = criterion(drowsy_logits, labels)
+                    loss_domain = domain_criterion(domain_logits, domain_labels)
+                    
                 loss = loss_drowsy + loss_domain
                 outputs = drowsy_logits
             else:
