@@ -95,7 +95,7 @@ DDD/
 │   ├── MDS505.pdf                  # Project report
 │   ├── generate_report.py          # Evaluation report for CNN models
 │   ├── generate_lstm_report.py     # Evaluation report for LSTM model
-│   └── task/                       # Detailed task logs (task_1.md … task_7.md)
+│   └── task/                       # Detailed task logs (task_1.md … task_7.md), brief process of how the project was developed
 │
 ├── results/                    # Generated plots & CSVs (after training)
 ├── requirements.txt
