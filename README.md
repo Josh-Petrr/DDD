@@ -224,15 +224,44 @@ Open **http://127.0.0.1:8000** in your browser. Allow webcam access and click **
 
 ---
 
-## 📊 Evaluation Metrics
+## 📊 Results
 
-- **Accuracy, Precision, Recall, F1-Score**
-- **ROC AUC, PR AUC**
-- **APCER** — Drowsy missed as Non-Drowsy *(safety-critical)*
-- **BPCER** — Non-Drowsy misclassified as Drowsy *(false alarm)*
-- **ACER** — (APCER + BPCER) / 2
-- **Confidence-tiered analysis** — High / Medium / Low confidence buckets
-- **Grad-CAM heatmaps** — Visual explainability
+> **Note on terminology:** "CNN-LSTM" and "FusionGRL_V4-LSTM" refer to the **exact same pipeline**. The "CNN" used inside the LSTM pipeline is the `FusionGRL_V4` model. The LSTM then classifies sequences of 30 frames of its embeddings.
+
+### Full Experiment Results (sourced from `results/` folder)
+
+| # | Folder | Model | Split Type | Acc | Recall | F1 | APCER | BPCER | ROC AUC |
+|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
+| 1 | `results_joint` | Baseline CNN | Joint (⚠️ Cheating) | 97.04% | 99.97% | 97.21% | 0.03% | 6.10% | 0.9985 |
+| 2 | `results_joint` | Geometric MLP | Joint (⚠️ Cheating) | 65.94% | 62.61% | 65.53% | 37.39% | 30.50% | 0.7302 |
+| 3 | `results_joint` | Fusion CNN+Geo | Joint (⚠️ Cheating) | 97.19% | 100.0% | 97.35% | 0.00% | 5.82% | 0.9995 |
+| 4 | `results_2` | Baseline CNN v2 | Disjoint (Bug) | 61.31% | 81.79% | 64.89% | 18.21% | 54.60% | 0.7607 |
+| 5 | `results_2` | Geometric MLP v2 | Disjoint (Bug) | 46.85% | 63.48% | 51.08% | 36.52% | 66.07% | 0.5840 |
+| 6 | `results_2` | Fusion v2 | Disjoint (Bug) | 46.04% | 78.36% | 55.94% | 21.64% | 79.06% | 0.6453 |
+| 7 | `results_3` | Baseline CNN v2 | Disjoint (Fixed) | 76.12% | 88.46% | 78.74% | 11.54% | 36.22% | 0.6447 |
+| 8 | `results_3` | Geometric MLP v2 | Disjoint (Fixed) | 62.64% | 53.83% | 59.03% | 46.17% | 28.56% | 0.7305 |
+| 9 | `results_3` | Fusion v2 | Disjoint (Fixed) | 78.21% | 92.64% | 80.96% | 7.36% | 36.22% | 0.6661 |
+| 10 | `result_4` | Baseline CNN v3 | Disjoint + GRL | 71.49% | 79.20% | 73.53% | 20.80% | 36.22% | 0.8273 |
+| 11 | `result_4` | Geometric MLP v3 | Disjoint + GRL | 60.80% | 58.21% | 59.75% | 41.79% | 36.62% | 0.6643 |
+| 12 | `result_4` | Fusion v3 | Disjoint + GRL | 63.16% | 65.92% | 64.15% | 34.08% | 39.60% | 0.6466 |
+| 13 | `result_4` | **FusionGRL v3** | Disjoint + GRL | 71.22% | 81.04% | 73.79% | 18.96% | 38.61% | 0.6674 |
+| 14 | `result_V4` | **FusionGRL_V4** | Disjoint + Higher Dropout | 70.87% | 77.91% | 72.79% | 22.09% | 36.17% | 0.7757 |
+| 15 | `final_results` ⭐ | **FusionGRL_V4 → LSTM** | Disjoint + Temporal | **72.52%** | **87.88%** | **76.32%** | **12.12%** | 43.08% | 0.6744 |
+
+> ⭐ = **Production model** running in the live webcam app (`app.py`)
+>
+> ⚠️ Experiments 1–3 used a **joint (non-disjoint) split** — the model memorised faces. Those results are invalid for real-world use.
+>
+> **APCER** = % of drowsy events missed (lower = safer). **BPCER** = % of false alarms (lower = fewer interruptions).
+
+### Metric Definitions
+
+| Metric | Meaning |
+|---|---|
+| **APCER** | Drowsy missed as Non-Drowsy — *the safety-critical metric* |
+| **BPCER** | Non-Drowsy misclassified as Drowsy — *false alarm rate* |
+| **ACER** | (APCER + BPCER) / 2 — balanced error |
+| **ROC AUC** | Ability to rank drowsy above awake across all thresholds |
 
 ---
 
