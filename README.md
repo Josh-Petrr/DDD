@@ -6,41 +6,50 @@
 
 ## 🧠 Overview
 
-This project builds a drowsiness detection system that generalizes to **completely unseen subjects** by fusing two complementary signal streams:
+This project builds a **real-time drowsiness detection system** that generalizes to **completely unseen subjects** by combining two complementary signal streams and adding temporal sequence modeling:
 
 | Signal | What it captures |
 |---|---|
 | **CNN Visual Features** (EfficientNet-B0, 1280-d) | Appearance — eyelid heaviness, facial slack |
 | **Geometric Landmarks** (MediaPipe, 4 features) | Kinematics — EAR, MAR, eyebrow drop, head tilt |
 
-Three model variants are trained and compared:
+The final pipeline is a two-stage **CNN-LSTM** system:
 
-| Model | Input | Purpose |
+| Stage | Model | Role |
 |---|---|---|
-| **BaselineCNN** | Image only | "Before" comparison |
-| **GeometricOnlyMLP** | 4 landmarks only | Ablation — what geometry alone achieves |
-| **FusionModel** | Image + 4 landmarks | Main model |
+| **Stage 1** | FusionGRL_V4 (EfficientNet-B0 + GRL) | Per-frame feature extraction |
+| **Stage 2** | DrowsinessLSTM | 30-frame temporal sequence classification |
+
+The LSTM looks at a **rolling 1-second window** of 30 fused feature vectors to detect drowsiness patterns over time (sustained eye closure, head nodding, prolonged yawning), achieving **87.88% Recall** and **12.12% APCER** on completely unseen drivers.
 
 ---
 
 ## 📐 Architecture
 
 ```
-Input Image (224×224)               MediaPipe FaceMesh
+Input Frame (224×224)              MediaPipe FaceLandmarker
         │                                   │
         ▼                                   ▼
-  EfficientNet-B0                  EAR · MAR · Eyebrow Dist · Head Tilt
-  (1280-d embedding)                   (4 geometric features)
+  EfficientNet-B0              EAR · MAR · Eyebrow Dist · Head Tilt
+  (1280-d embedding)               (4 geometric features)
         │                                   │
         └──────────────┬────────────────────┘
                        ▼
              Concatenate [1280 + 4 = 1284]
+                       │
+              (per frame, repeated 30 times)
+                       │
                        ▼
-              Fusion MLP (256 → 64 → 2)
-              (BatchNorm + ReLU + Dropout)
+          Rolling Buffer [30 frames]
+                       │
                        ▼
-              Drowsy  /  Non-Drowsy
+           DrowsinessLSTM
+      (LSTM 64 hidden + Dropout 0.6)
+                       ▼
+              Drowsy  /  Awake
 ```
+
+The CNN is trained with a **Gradient Reversal Layer (GRL)** domain classifier that forces it to learn identity-invariant (driver-agnostic) features.
 
 ---
 
@@ -48,39 +57,45 @@ Input Image (224×224)               MediaPipe FaceMesh
 
 ```text
 DDD/
-├── backend/                    # FastAPI REST API
-│   ├── main.py                 # Endpoints: /health, /predict/image, /predict/frame
-│   ├── schemas.py              # Pydantic request/response schemas
-│   ├── services/
-│   │   └── inference_service.py  # Model loading & prediction wrapper
-│   └── requirements.txt
+├── app.py                      # 🚀 FastAPI + WebSocket live inference server
+│
+├── static/                     # Live Webcam Dashboard (Frontend)
+│   ├── index.html              # Dark-mode glassmorphic UI
+│   ├── styles.css              # Animations, gauges, threat level cards
+│   └── script.js               # WebSocket client, webcam capture, UI updates
 │
 ├── ml_pipeline/                # Machine Learning Pipeline
 │   ├── config.py               # Paths, hyperparameters, constants
 │   ├── data_split.py           # Subject-disjoint train/val/test splitting
-│   ├── dataset.py              # PyTorch Dataset + data augmentation
-│   ├── extract_features.py     # Batch MediaPipe feature extraction
-│   ├── landmark_features.py    # EAR, MAR, eyebrow distance, head tilt
-│   ├── models.py               # BaselineCNN, GeometricOnlyMLP, FusionModel
-│   ├── train.py                # 2-stage training loop (AMP + early stopping)
-│   ├── train_all.py            # Orchestrator — trains all 3 models
+│   ├── dataset.py              # PyTorch Dataset + data augmentation (CNN)
+│   ├── dataset_lstm.py         # Sequence Dataset — sliding window over .npy arrays
+│   ├── landmark_features.py    # EAR, MAR, eyebrow distance, head tilt (MediaPipe)
+│   ├── models.py               # FusionGRL_V4 (CNN) + DrowsinessLSTM
+│   ├── train.py                # 2-stage CNN training loop (AMP + GRL)
+│   ├── train_all.py            # Orchestrator — trains all CNN variants
+│   ├── train_lstm.py           # LSTM training loop (sliding window sequences)
 │   ├── evaluate.py             # Accuracy, F1, APCER/BPCER/ACER, ROC, PR
 │   ├── gradcam.py              # Grad-CAM visual explanations
 │   └── inference.py            # CLI inference on unseen images/folders
 │
 ├── assets/
-│   ├── checkpoints/            # Trained .pth model weights (download separately)
+│   ├── checkpoints/
+│   │   ├── V4/
+│   │   │   └── fusion_grl_4_best.pth   # Best CNN checkpoint
+│   │   └── lstm_best.pth               # Best LSTM checkpoint
 │   └── face_landmarker.task    # MediaPipe FaceLandmarker task file
 │
-├── data/                       # ⚠ NOT in Git (see below)
-│   ├── Driver Drowsiness Dataset (DDD)/
-│   ├── geometric_features.csv
-│   └── splits.json
+├── data/                       # ⚠ NOT in Git — place locally
+│   ├── Driver Drowsiness Dataset (DDD)/   # Raw images (~41K)
+│   ├── geometric_features.csv             # MediaPipe features for all frames
+│   ├── splits.json                        # Subject-disjoint split assignments
+│   └── sequence_features/                 # Pre-extracted CNN embeddings (.npy)
 │
 ├── docs/
-│   ├── MDS505.pdf              # Project report
-│   ├── drowsiness_feature_fusion_plan.md
-│   └── generate_report.py      # Produces all plots & evaluation tables
+│   ├── MDS505.pdf                  # Project report
+│   ├── generate_report.py          # Evaluation report for CNN models
+│   ├── generate_lstm_report.py     # Evaluation report for LSTM model
+│   └── task/                       # Detailed task logs (task_1.md … task_7.md)
 │
 ├── results/                    # Generated plots & CSVs (after training)
 ├── requirements.txt
@@ -139,28 +154,44 @@ python ml_pipeline/data_split.py
 ```
 Outputs: `data/splits.json`
 
-### 5. Train All Models *(~1–1.5 hrs on GPU)*
+### 5. Train the CNN Models *(~1–1.5 hrs on GPU)*
 ```bash
 python ml_pipeline/train_all.py
 ```
-Outputs: `assets/checkpoints/baseline_best.pth`, `geometric_best.pth`, `fusion_best.pth`
+Outputs: `assets/checkpoints/V4/fusion_grl_4_best.pth` (and other variants)
 
-### 6. Generate Evaluation Report
+### 6. Pre-extract CNN Features for LSTM *(~20–30 min)*
+This runs all 41K images through the frozen CNN and saves the embeddings:
+```bash
+python ml_pipeline/extract_features.py --mode sequence
+```
+Outputs: `data/sequence_features/*.npy`
+
+### 7. Train the LSTM *(~5–10 min)*
+```bash
+python ml_pipeline/train_lstm.py
+```
+Outputs: `assets/checkpoints/lstm_best.pth`
+
+### 8. Generate Evaluation Reports
+
+**For the CNN models** (Baseline, Geometric, FusionGRL variants):
 ```bash
 python docs/generate_report.py
 ```
-Outputs: `results/` — plots, confusion matrices, ROC curves, Grad-CAM maps
+Outputs: `results/result_V4/` — confusion matrices, ROC curves, confidence analysis, Grad-CAM maps
 
-### 7. Run CLI Inference
+**For the LSTM sequence model:**
 ```bash
-python ml_pipeline/inference.py --input path/to/image.jpg --model fusion
+python docs/generate_lstm_report.py
 ```
+Outputs: `results/lstm_1/` — training curves, confusion matrix, ROC curve, confidence tiers
 
-### 8. Start the REST API Backend
+### 9. Launch the Live Webcam App
 ```bash
-uvicorn backend.main:app --reload --port 8000
+python app.py
 ```
-Interactive docs: **http://127.0.0.1:8000/docs**
+Open **http://127.0.0.1:8000** in your browser. Allow webcam access and click **Start Detection**.
 
 ---
 
