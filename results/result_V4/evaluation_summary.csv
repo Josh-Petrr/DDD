@@ -1,0 +1,2 @@
+Model,Accuracy (%),Precision (%),Recall (%),F1-Score (%),ROC AUC,APCER (%),BPCER (%),ACER (%)
+FUSION_GRL_4,70.87,68.29,77.91,72.79,0.7757,22.09,36.17,29.13

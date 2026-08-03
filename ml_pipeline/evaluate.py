@@ -125,6 +125,96 @@ def evaluate_model(model: torch.nn.Module, test_loader,
     return results
 
 
+def evaluate_lstm_model(model: torch.nn.Module, test_loader,
+                        model_name: str,
+                        device: torch.device = config.DEVICE) -> dict:
+    """
+    Run comprehensive evaluation on the test set for the LSTM Sequence model.
+    """
+    model = model.to(device)
+    model.eval()
+    
+    all_labels = []
+    all_preds = []
+    all_probs = []
+    
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            
+            if device.type == "cuda":
+                with autocast(device_type="cuda"):
+                    outputs = model(x)
+            else:
+                outputs = model(x)
+            
+            probs = F.softmax(outputs, dim=1)
+            _, preds = torch.max(probs, 1)
+            
+            all_labels.extend(y.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
+    
+    all_labels = np.array(all_labels)
+    all_preds = np.array(all_preds)
+    all_probs = np.array(all_probs)
+    
+    # ── Core metrics ──
+    acc = accuracy_score(all_labels, all_preds)
+    prec = precision_score(all_labels, all_preds, average="binary", pos_label=0)
+    rec = recall_score(all_labels, all_preds, average="binary", pos_label=0)
+    f1 = f1_score(all_labels, all_preds, average="binary", pos_label=0)
+    cm = confusion_matrix(all_labels, all_preds)
+    
+    # ── APCER / BPCER / ACER ──
+    drowsy_mask = all_labels == 0
+    if drowsy_mask.sum() > 0:
+        apcer = (all_preds[drowsy_mask] != 0).sum() / drowsy_mask.sum()
+    else:
+        apcer = 0.0
+    
+    non_drowsy_mask = all_labels == 1
+    if non_drowsy_mask.sum() > 0:
+        bpcer = (all_preds[non_drowsy_mask] != 1).sum() / non_drowsy_mask.sum()
+    else:
+        bpcer = 0.0
+    
+    acer = (apcer + bpcer) / 2.0
+    
+    max_probs = np.max(all_probs, axis=1)
+    tiers = _compute_confidence_tiers(all_labels, all_preds, max_probs)
+    
+    fpr, tpr, _ = roc_curve(all_labels, all_probs[:, 0], pos_label=0)
+    roc_auc = auc(fpr, tpr)
+    
+    pr_precision, pr_recall, _ = precision_recall_curve(all_labels, all_probs[:, 0], pos_label=0)
+    pr_auc = average_precision_score(all_labels, all_probs[:, 0], pos_label=0)
+    
+    results = {
+        "model_name": model_name,
+        "accuracy": float(acc),
+        "precision": float(prec),
+        "recall": float(rec),
+        "f1_score": float(f1),
+        "apcer": float(apcer),
+        "bpcer": float(bpcer),
+        "acer": float(acer),
+        "confusion_matrix": cm.tolist(),
+        "roc_auc": float(roc_auc),
+        "pr_auc": float(pr_auc),
+        "confidence_tiers": tiers,
+        "_roc": {"fpr": fpr, "tpr": tpr},
+        "_pr": {"precision": pr_precision, "recall": pr_recall},
+        "_all_probs": all_probs,
+        "_all_labels": all_labels,
+        "_all_preds": all_preds,
+    }
+    
+    _print_results(results)
+    return results
+
+
 def _compute_confidence_tiers(labels, preds, max_probs):
     tiers = {}
     boundaries = [

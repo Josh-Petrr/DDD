@@ -28,6 +28,7 @@ FEATURES_FILE = os.path.join(PROJECT_ROOT, "data", "geometric_features.csv")
 CHECKPOINTS_DIR = os.path.join(PROJECT_ROOT, "assets", "checkpoints")
 LANDMARK_TASK_FILE = os.path.join(PROJECT_ROOT, "assets", "face_landmarker.task")
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+SEQUENCE_FEATURES_DIR = os.path.join(PROJECT_ROOT, "data", "sequence_features")
 
 os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)

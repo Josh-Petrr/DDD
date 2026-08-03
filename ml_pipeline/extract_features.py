@@ -1,116 +1,94 @@
 """
-extract_features.py — Batch geometric feature extraction pipeline.
+extract_features.py — Offline feature extraction for Sequence Modeling.
 
-Runs landmark_features.py across the entire dataset and saves results
-to geometric_features.csv.
-
-Uses a single LandmarkExtractor (not multiprocessed, since the MediaPipe
-Tasks API objects can't be pickled). Processing is still fast because
-FaceLandmarker runs efficiently on CPU.
-
-Usage:
-    python extract_features.py
+Runs the entire dataset through the pre-trained FUSION_GRL_V4 feature extractor.
+Groups the frames by subject and class, sorts them chronologically,
+and saves them as (N_frames, 1284) numpy arrays.
 """
 
 import os
-import csv
-import time
-
-import cv2
+import torch
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 import config
-from landmark_features import LandmarkExtractor
+from dataset import get_subject_prefix, DrowsinessDataset
+from data_split import load_splits
+from models import get_model
 
 
-def extract_all_features():
-    """Extract geometric features for every image in the dataset."""
+def extract():
+    os.makedirs(config.SEQUENCE_FEATURES_DIR, exist_ok=True)
     
-    # Gather all image paths
-    tasks = []
+    # 1. Load trained feature extractor
+    print("Loading FUSION_GRL_V4 feature extractor...")
+    splits = load_splits()
     
-    for label, (label_name, directory) in enumerate([
-        ("Drowsy", config.DROWSY_DIR),
-        ("Non Drowsy", config.NON_DROWSY_DIR)
-    ]):
-        files = sorted([
-            f for f in os.listdir(directory)
-            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ])
-        for fname in files:
-            filepath = os.path.join(directory, fname)
-            tasks.append((filepath, fname, label))
+    # Determine num_domains just to satisfy model initialization
+    train_subjects = set(get_subject_prefix(item["filename"]) for item in splits["train"])
+    num_domains = len(train_subjects)
     
-    print(f"Extracting geometric features from {len(tasks)} images...")
+    model = get_model("fusion_grl_v4", pretrained=False, num_domains=num_domains)
+    checkpoint = os.path.join(config.CHECKPOINTS_DIR, "fusion_grl_4_best.pth")
+    checkpoint_v4 = os.path.join(config.CHECKPOINTS_DIR, "V4", "fusion_grl_4_best.pth")
     
-    start_time = time.time()
-    results = []
-    success_count = 0
-    fail_count = 0
-    
-    # Create a single extractor instance (reused for all images)
-    extractor = LandmarkExtractor()
-    
-    for filepath, filename, label in tqdm(tasks, desc="Extracting features"):
-        image = cv2.imread(filepath)
+    if os.path.exists(checkpoint):
+        target_checkpoint = checkpoint
+    elif os.path.exists(checkpoint_v4):
+        target_checkpoint = checkpoint_v4
+    else:
+        raise FileNotFoundError(f"Missing checkpoint at {checkpoint} or {checkpoint_v4}")
         
-        if image is None:
-            result = {
-                "filename": filename, "label": label,
-                "ear": 0.0, "mar": 0.0, "eyebrow_dist": 0.0,
-                "head_tilt": 0.0, "success": False
-            }
-        else:
-            features = extractor.extract(image)
-            result = {
-                "filename": filename,
-                "label": label,
-                "ear": features["ear"],
-                "mar": features["mar"],
-                "eyebrow_dist": features["eyebrow_dist"],
-                "head_tilt": features["head_tilt"],
-                "success": features["success"],
-            }
+    model.load_state_dict(torch.load(target_checkpoint, map_location=config.DEVICE, weights_only=True))
+    model = model.to(config.DEVICE)
+    model.eval()
+    
+    # 2. Prepare dataset helper (for baselining and transformations)
+    geo_df = pd.read_csv(config.FEATURES_FILE)
+    ds = DrowsinessDataset([], geo_df, augment=False, subject_to_idx={})
+    
+    # Process all splits
+    for split_name, items in splits.items():
+        print(f"\nProcessing {split_name} split...")
         
-        results.append(result)
-        if result["success"]:
-            success_count += 1
-        else:
-            fail_count += 1
-    
-    del extractor
-    elapsed = time.time() - start_time
-    
-    # Save to CSV
-    fieldnames = ["filename", "label", "ear", "mar", "eyebrow_dist",
-                  "head_tilt", "success"]
-    
-    # Sort by filename for consistency
-    results.sort(key=lambda x: x["filename"])
-    
-    with open(config.FEATURES_FILE, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-    
-    # Print summary
-    total = success_count + fail_count
-    print(f"\n{'=' * 50}")
-    print(f"Feature Extraction Complete")
-    print(f"{'=' * 50}")
-    print(f"Total images:      {total}")
-    print(f"Successful:        {success_count} ({100*success_count/total:.1f}%)")
-    print(f"Failed (no face):  {fail_count} ({100*fail_count/total:.1f}%)")
-    print(f"Time elapsed:      {elapsed:.1f}s ({elapsed/60:.1f} min)")
-    print(f"Speed:             {total/elapsed:.1f} images/sec")
-    print(f"Output saved to:   {config.FEATURES_FILE}")
-    
-    if fail_count / total > 0.15:
-        print(f"\n⚠ WARNING: Failure rate ({100*fail_count/total:.1f}%) exceeds 15%.")
-        print("  Consider lowering min_detection_confidence in LandmarkExtractor.")
-    
-    return results
-
+        # Group by subject AND label so we don't mix drowsy and non-drowsy frames
+        sequences = {}
+        for item in items:
+            subj = get_subject_prefix(item["filename"])
+            key = f"{subj}_{item['label']}"
+            if key not in sequences:
+                sequences[key] = []
+            sequences[key].append(item)
+            
+        for key, seq_items in tqdm(sequences.items()):
+            # Sort chronologically by filename (e.g., A0001, A0002)
+            seq_items = sorted(seq_items, key=lambda x: x["filename"])
+            
+            all_features = []
+            
+            with torch.no_grad():
+                for item in seq_items:
+                    # Temporarily inject item into dataset to reuse exact normalization logic
+                    ds.items = [item]
+                    img_tensor, geo_tensor, _, _ = ds[0]
+                    
+                    img_tensor = img_tensor.unsqueeze(0).to(config.DEVICE)
+                    geo_tensor = geo_tensor.unsqueeze(0).to(config.DEVICE)
+                    
+                    # Extract 1280-d visual feature from EfficientNet
+                    cnn_emb = model.get_embedding(img_tensor)
+                    
+                    # Concat with 4-d geometric feature
+                    fused = torch.cat([cnn_emb, geo_tensor], dim=1).cpu().numpy()[0]
+                    all_features.append(fused)
+            
+            # Save numpy array of shape (N_frames, 1284)
+            features_array = np.stack(all_features)
+            out_path = os.path.join(config.SEQUENCE_FEATURES_DIR, f"{split_name}_{key}.npy")
+            np.save(out_path, features_array)
+            
+    print(f"\nFeature extraction complete! Saved to {config.SEQUENCE_FEATURES_DIR}")
 
 if __name__ == "__main__":
-    extract_all_features()
+    extract()

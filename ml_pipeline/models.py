@@ -268,12 +268,66 @@ class FusionGRLv4Model(FusionModel):
         return drowsy_logits, domain_logits
 
 
+class GaussianNoise(nn.Module):
+    """Injects random noise to prevent feature memorization."""
+    def __init__(self, std: float = 0.1):
+        super().__init__()
+        self.std = std
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training and self.std > 0:
+            noise = torch.randn_like(x) * self.std
+            return x + noise
+        return x
+
+
+class DrowsinessLSTM(nn.Module):
+    """
+    Temporal Sequence Model.
+    Takes pre-extracted features of shape (Batch, SeqLen, 1284)
+    where 1284 = 1280 (EfficientNet) + 4 (Geometric).
+    """
+    def __init__(self, input_size: int = 1284, hidden_size: int = 64, 
+                 num_layers: int = 1, num_classes: int = config.NUM_CLASSES):
+        super().__init__()
+        
+        # Inject noise into features before LSTM sees them
+        self.noise = GaussianNoise(std=0.2)
+        
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=0.3 if num_layers > 1 else 0
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.BatchNorm1d(32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.6),
+            nn.Linear(32, num_classes)
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: (Batch, SeqLen, InputSize)
+        x = self.noise(x)
+        
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        
+        # Take the hidden state of the very last layer for the very last timestep
+        # h_n shape: (num_layers, Batch, hidden_size)
+        final_h = h_n[-1]
+        
+        logits = self.classifier(final_h)
+        return logits
+
+
 def get_model(model_name: str, pretrained: bool = True, num_domains: int = 0) -> nn.Module:
     """
     Factory function to create a model by name.
     """
-    model_name = model_name.lower()
-    
     if model_name == "baseline":
         model = BaselineCNN(pretrained=pretrained)
     elif model_name == "geometric":
@@ -284,6 +338,8 @@ def get_model(model_name: str, pretrained: bool = True, num_domains: int = 0) ->
         model = FusionGRLModel(pretrained=pretrained, num_domains=num_domains)
     elif model_name == "fusion_grl_v4":
         model = FusionGRLv4Model(pretrained=pretrained, num_domains=num_domains)
+    elif model_name == "lstm":
+        model = DrowsinessLSTM()
     else:
         raise ValueError(f"Unknown model: {model_name}. ")
     

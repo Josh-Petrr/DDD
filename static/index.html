@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DrowsiGuard | Live Drowsiness Detection</title>
+    <meta name="description" content="Real-time AI-powered driver drowsiness detection using CNN-LSTM temporal sequence modeling">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!-- Background Particles -->
+    <div class="bg-grid"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                    <line x1="9" y1="9" x2="9.01" y2="9"/>
+                    <line x1="15" y1="9" x2="15.01" y2="9"/>
+                </svg>
+            </div>
+            <div>
+                <h1>DrowsiGuard</h1>
+                <span class="subtitle">CNN-LSTM Temporal Sequence Model</span>
+            </div>
+        </div>
+        <div class="header-controls">
+            <div class="status-chip" id="connectionStatus">
+                <span class="status-dot"></span>
+                <span>Disconnected</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard -->
+    <main class="dashboard">
+        <!-- Left: Camera Feed -->
+        <section class="camera-panel glass-panel">
+            <div class="panel-header">
+                <h2>Live Camera Feed</h2>
+                <div class="fps-badge" id="fpsBadge">-- FPS</div>
+            </div>
+            <div class="camera-container">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="captureCanvas" style="display:none;"></canvas>
+                
+                <!-- Overlay when not started -->
+                <div class="camera-overlay" id="cameraOverlay">
+                    <div class="overlay-content">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                            <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                        <p>Click Start to enable camera</p>
+                    </div>
+                </div>
+
+                <!-- Alert Flash Overlay -->
+                <div class="alert-flash" id="alertFlash"></div>
+            </div>
+            <div class="camera-controls">
+                <button class="btn btn-primary" id="startBtn" onclick="startDetection()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Start Detection
+                </button>
+                <button class="btn btn-secondary" id="stopBtn" onclick="stopDetection()" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    Stop
+                </button>
+            </div>
+        </section>
+
+        <!-- Right: Telemetry -->
+        <section class="telemetry-panel">
+            <!-- Threat Level Card -->
+            <div class="threat-card glass-panel" id="threatCard">
+                <div class="panel-header">
+                    <h2>Threat Level</h2>
+                </div>
+                <div class="threat-display">
+                    <div class="threat-icon" id="threatIcon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                            <line x1="9" y1="9" x2="9.01" y2="9"/>
+                            <line x1="15" y1="9" x2="15.01" y2="9"/>
+                        </svg>
+                    </div>
+                    <div class="threat-label" id="threatLabel">STANDBY</div>
+                    <div class="threat-confidence" id="threatConfidence">--</div>
+                </div>
+                <!-- Threat Progress Bar -->
+                <div class="threat-bar-container">
+                    <div class="threat-bar" id="threatBar" style="width: 0%"></div>
+                </div>
+                <div class="threat-bar-labels">
+                    <span>Awake</span>
+                    <span>Drowsy</span>
+                </div>
+            </div>
+
+            <!-- Buffer Status -->
+            <div class="buffer-card glass-panel">
+                <div class="panel-header">
+                    <h2>Sequence Buffer</h2>
+                    <span class="mono-badge" id="bufferCount">0 / 30</span>
+                </div>
+                <div class="buffer-bar-container">
+                    <div class="buffer-bar" id="bufferBar" style="width: 0%"></div>
+                </div>
+                <p class="buffer-hint" id="bufferHint">Collecting 30 frames (1 second) before first prediction...</p>
+            </div>
+
+            <!-- Biometric Gauges -->
+            <div class="metrics-card glass-panel">
+                <div class="panel-header">
+                    <h2>Live Biometrics</h2>
+                    <div class="face-status" id="faceStatus">
+                        <span class="status-dot offline"></span> No face
+                    </div>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <div class="metric-label">EAR (Eye Aspect Ratio)</div>
+                        <div class="metric-bar-wrap">
+                            <div class="metric-bar ear-bar" id="earBar" style="width: 0%"></div>
+                        </div>
+                        <div class="metric-value" id="earValue">--</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">MAR (Mouth Aspect Ratio)</div>
+                        <div class="metric-bar-wrap">
+                            <div class="metric-bar mar-bar" id="marBar" style="width: 0%"></div>
+                        </div>
+                        <div class="metric-value" id="marValue">--</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Eyebrow Distance</div>
+                        <div class="metric-bar-wrap">
+                            <div class="metric-bar eb-bar" id="ebBar" style="width: 0%"></div>
+                        </div>
+                        <div class="metric-value" id="ebValue">--</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Head Tilt</div>
+                        <div class="metric-bar-wrap">
+                            <div class="metric-bar tilt-bar" id="tiltBar" style="width: 0%"></div>
+                        </div>
+                        <div class="metric-value" id="tiltValue">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Session Stats -->
+            <div class="stats-card glass-panel">
+                <div class="panel-header">
+                    <h2>Session Stats</h2>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statDuration">00:00</div>
+                        <div class="stat-label">Duration</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFrames">0</div>
+                        <div class="stat-label">Frames</div>
+                    </div>
+                    <div class="stat-item alert-stat">
+                        <div class="stat-value" id="statAlerts">0</div>
+                        <div class="stat-label">Drowsy Alerts</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statAvgConf">--%</div>
+                        <div class="stat-label">Avg Confidence</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Audio Alarm (generated via Web Audio API in JS) -->
+    <script src="/static/script.js"></script>
+</body>
+</html>
