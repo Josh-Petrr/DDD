@@ -7,9 +7,12 @@ data/
 ml_pipeline/extract_features.py
 
 # ── Trained model checkpoints (binary, large) ──
-# To share weights, use GitHub Releases or a model hub (e.g. HuggingFace)
-assets/checkpoints/*.pth
-assets/checkpoints/*.pt
+# Ignore all checkpoints by default
+assets/checkpoints/*
+# Except the best models
+!assets/checkpoints/V4/
+!assets/checkpoints/V4/fusion_grl_4_best.pth
+!assets/checkpoints/lstm_best.pth
 
 # ── Python cache ──
 __pycache__/
@@ -59,6 +62,12 @@ results/*.png
 results/*.csv
 results/*.json
 
+# Ignore all subfolders in results...
+results/*/
+# ...except the latest results
+!results/result_V4/
+!results/lstm_1/
+
 # ── Logs ──
 *.log
 logs/
@@ -67,4 +76,8 @@ logs/
 *.tmp
 *.temp
 
-assets/checkpoints/
+# ── Specific files requested to ignore ──
+Recency.md
+Restructuring Project for Fullstack Application.md
+docs/drowsiness_feature_fusion_plan.md
+docs/task/
