@@ -1,0 +1,2 @@
+Model,Accuracy (%),Precision (%),Recall (%),F1-Score (%),ROC AUC,APCER (%),BPCER (%),ACER (%)
+LSTM,72.52,67.44,87.88,76.32,0.6744,12.12,43.08,27.6

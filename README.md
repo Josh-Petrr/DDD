@@ -277,6 +277,8 @@ Open **http://127.0.0.1:8000** in your browser. Allow webcam access and click **
 | Scheduler | Cosine Annealing |
 | Mixed Precision | AMP (float16) |
 | Early stopping | Patience = 5 |
+| **V4 Dropout** | 0.5 (Aggressive regularization) |
+| **V4 Weight Decay**| 5e-3 (Aggressive regularization) |
 
 ---
 
@@ -284,6 +286,40 @@ Open **http://127.0.0.1:8000** in your browser. Allow webcam access and click **
 
 - **SDG 3 — Good Health & Well-Being** (Target 3.6): Reducing road traffic fatalities
 - **SDG 11 — Sustainable Cities & Communities** (Target 11.2): Safe transport systems
+
+---
+
+## 🚧 Real-Life Deployment Limitations & Future Work
+
+When testing the final application on live, unseen people via webcam (`app.py`), we observed a practical issue: **the model frequently predicted "Drowsy" even when the user was fully awake.**
+
+### Identified Limitations
+
+1. **The Calibration Problem (Geometric Feature Mismatch)**
+   - In the live application, we normalize live geometric features (EAR, MAR) by dividing them by the **global 95th percentile** from the training dataset.
+   - *The Issue:* If the global baseline for a "wide open eye" (EAR) is 0.35, but a live user naturally has smaller or narrower eyes with a max EAR of 0.25, the system calculates `0.25 / 0.35 = 0.71`. The model perceives this 71% ratio as a drooping eye and incorrectly flags the user as drowsy.
+   - *Result:* High false positive rate for individuals whose facial geometry significantly deviates from the training dataset's average.
+
+2. **The Safety Tradeoff (High BPCER)**
+   - As shown in the metrics above, our final LSTM model has a BPCER (False Alarm rate) of 43%.
+   - *The Issue:* Because we explicitly optimized the architecture and hyperparameters to aggressively minimize APCER (Missed Drowsiness), the model became highly sensitive. If the sequence is even slightly ambiguous, it defaults to "Drowsy" to prioritize life safety.
+
+3. **Domain Shift (Lab vs. Real World)**
+   - The DDD dataset images were captured in controlled environments. Live webcams introduce extreme variations in lighting (backlighting, dark rooms), camera angles (looking down at a laptop vs. up at a dashcam), and distance from the camera, all of which degrade the CNN embeddings.
+
+### Future Improvements
+
+To make the system truly production-ready for real-world driving scenarios, we recommend the following engineering solutions:
+
+1. **Dynamic User Calibration (Rolling Baselines)**
+   - *Solution:* Instead of using a static global baseline, the app should silently record the user's maximum EAR and minimum MAR over the first 10-15 seconds of the session (assuming the driver starts the car awake).
+   - *Impact:* The normalizer will divide live values by the *user's personal baseline*, immediately resolving the false alarms caused by natural eye-shape differences.
+
+2. **Tunable Confidence Thresholds**
+   - *Solution:* Currently, the app flashes the alarm if `P(Drowsy) > 0.5`. Exposing a sensitivity slider in the UI (e.g., requiring >0.75 confidence for "Drowsy") allows users to manually reduce false alarms based on their environment.
+
+3. **Data Augmentation for Live Conditions**
+   - *Solution:* Fine-tune the CNN using heavily augmented versions of the dataset that explicitly mimic poor webcam quality (motion blur, low-light noise, off-center cropping) to improve robustness against real-world domain shifts.
 
 ---
 

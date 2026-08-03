@@ -4,12 +4,31 @@
 
 # ── Data directory (dataset, splits, features — reproducible) ──
 data/
-ml_pipeline/extract_features.py
+
+# ── ml_pipeline directory ──
+ml_pipeline/extract_filenames.py
+ml_pipeline/export_unseen_data.py
 
 # ── Trained model checkpoints (binary, large) ──
-# To share weights, use GitHub Releases or a model hub (e.g. HuggingFace)
-assets/checkpoints/*.pth
-assets/checkpoints/*.pt
+assets/checkpoints/*
+!assets/checkpoints/V4/
+!assets/checkpoints/lstm_best.pth
+
+# ── Root level specific files ──
+Recency.md
+Restructuring Project for Fullstack Application.md
+
+# ── Docs directory ──
+docs/*
+!docs/generate_report.py
+!docs/generate_lstm_report.py
+!docs/MDS505.pdf
+!docs/task/
+
+# ── Results directory ──
+results/*
+!results/final_results/
+!results/result_V4/
 
 # ── Python cache ──
 __pycache__/
@@ -53,12 +72,6 @@ desktop.ini
 *.suo
 *.user
 
-# ── Results (generated output — reproducible via generate_report.py) ──
-# Comment these out if you want to commit result plots to the repo
-results/*.png
-results/*.csv
-results/*.json
-
 # ── Logs ──
 *.log
 logs/
@@ -66,5 +79,3 @@ logs/
 # ── Temporary files ──
 *.tmp
 *.temp
-
-assets/checkpoints/
